@@ -1,0 +1,195 @@
+'use client';
+
+import { useEffect, useRef, useState, useCallback } from 'react';
+import { Step, ConversationsResponse, TrajectorySummary } from './types';
+import { extractStepContent } from './step-utils';
+import { showNotification } from './notifications';
+import { API_BASE, getWsUrl } from './config';
+import { authHeaders, authWsUrl } from './auth';
+import { getCascadeStatus } from './cascade-api';
+
+interface WSState {
+    connected: boolean;
+    steps: Step[];
+    conversations: Record<string, TrajectorySummary>;
+    currentConvId: string | null;
+    cascadeStatus: string | null;
+    lastUpdate: string;
+    conversationsVersion: number; // bumped when backend discovers new conversations
+}
+
+export function useWebSocket() {
+    const [state, setState] = useState<WSState>({
+        connected: false,
+        steps: [] as Step[],
+        conversations: {} as Record<string, TrajectorySummary>,
+        currentConvId: null,
+        cascadeStatus: null,
+        lastUpdate: '',
+        conversationsVersion: 0,
+    });
+    const wsRef = useRef<WebSocket | null>(null);
+    const reconnectRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    // Use refs for values needed in WS handlers to avoid stale closures
+    const currentConvIdRef = useRef<string | null>(null);
+
+    // Keep ref in sync with state
+    useEffect(() => { currentConvIdRef.current = state.currentConvId; }, [state.currentConvId]);
+
+    const loadConversations = useCallback(async () => {
+        try {
+            const res = await fetch(`${API_BASE}/api/conversations`, { headers: authHeaders() });
+            const data: ConversationsResponse = await res.json();
+            if (data.trajectorySummaries) {
+                setState(prev => ({ ...prev, conversations: data.trajectorySummaries! }));
+            }
+        } catch (e) {
+            console.error('Failed to load conversations:', e);
+        }
+    }, []);
+
+    // Stable ref for loadConversations so connect doesn't depend on it
+    const loadConversationsRef = useRef(loadConversations);
+    loadConversationsRef.current = loadConversations;
+
+    const connect = useCallback(async () => {
+        try {
+            const wsBase = await getWsUrl();
+            const ws = new WebSocket(authWsUrl(wsBase));
+            wsRef.current = ws;
+
+            ws.onopen = () => {
+                console.log('[WS] connected, re-syncing conversation...');
+                // Use ref for immediate access to current conv ID (no stale closure)
+                const convId = currentConvIdRef.current;
+                console.log('[WS] onopen currentConvId:', convId?.substring(0, 8));
+                if (convId && ws.readyState === 1) {
+                    ws.send(JSON.stringify({ type: 'set_conversation', conversationId: convId }));
+                }
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'status') {
+                        console.log('[WS] status:', data.detected);
+                        setState(prev => ({ ...prev, connected: data.detected }));
+                        if (data.detected) loadConversationsRef.current();
+                    } else if (data.type === 'steps_init') {
+                        console.log('[WS] steps_init:', data.steps?.length, 'for', data.conversationId?.substring(0, 8));
+                        setState(prev => {
+                            // Only accept init for current conversation
+                            if (data.conversationId && data.conversationId !== prev.currentConvId) return prev;
+                            return {
+                                ...prev,
+                                steps: data.steps || [],
+                                lastUpdate: new Date().toLocaleTimeString(),
+                            };
+                        });
+                        // Fetch cascade status on init (handles reload/reconnect)
+                        const convId = data.conversationId || currentConvIdRef.current;
+                        if (convId) {
+                            getCascadeStatus(convId)
+                                .then(s => {
+                                    setState(prev => {
+                                        if (prev.currentConvId !== convId) return prev;
+                                        return { ...prev, cascadeStatus: s.status || null };
+                                    });
+                                })
+                                .catch(() => { /* ignore — status unavailable */ });
+                        }
+                    } else if (data.type === 'steps_new') {
+                        console.log('[WS] steps_new received:', data.steps?.length, 'for', data.conversationId?.substring(0, 8));
+                        setState(prev => {
+                            // Only append if same conversation
+                            if (data.conversationId && data.conversationId !== prev.currentConvId) {
+                                console.log('[WS] steps_new SKIP: conv mismatch', data.conversationId?.substring(0, 8), '!=', prev.currentConvId?.substring(0, 8));
+                                return prev;
+                            }
+                            const newSteps = data.steps || [];
+                            if (newSteps.length === 0) return prev;
+                            // Dedup: only append steps beyond current length
+                            const currentLen = prev.steps.length;
+                            const expectedStart = data.total ? data.total - newSteps.length : currentLen;
+                            const skipCount = Math.max(0, currentLen - expectedStart);
+                            const actualNew = newSteps.slice(skipCount);
+                            console.log(`[WS] steps_new: ${newSteps.length} incoming, currentLen=${currentLen}, total=${data.total}, expectedStart=${expectedStart}, skipCount=${skipCount}, actualNew=${actualNew.length}`);
+                            if (actualNew.length === 0) return prev;
+                            return {
+                                ...prev,
+                                steps: [...prev.steps, ...actualNew],
+                                lastUpdate: new Date().toLocaleTimeString(),
+                            };
+                        });
+                        // Desktop notification for agent responses when tab hidden
+                        const notifySteps = (data.steps || []).filter((s: Step) => s.type === 'CORTEX_STEP_TYPE_NOTIFY_USER');
+                        if (notifySteps.length > 0) {
+                            const content = extractStepContent(notifySteps[0]) || 'Agent needs your attention';
+                            showNotification('AntigravityChat', content);
+                        }
+                    } else if (data.type === 'step_updated') {
+                        setState(prev => {
+                            if (data.conversationId && data.conversationId !== prev.currentConvId) return prev;
+                            const updated = [...prev.steps];
+                            if (data.index >= 0 && data.index < updated.length) {
+                                updated[data.index] = data.step;
+                            }
+                            return { ...prev, steps: updated, lastUpdate: new Date().toLocaleTimeString() };
+                        });
+                    } else if (data.type === 'cascade_status') {
+                        setState(prev => {
+                            if (data.conversationId && data.conversationId !== prev.currentConvId) return prev;
+                            return { ...prev, cascadeStatus: data.status };
+                        });
+                    } else if (data.type === 'conversations_updated') {
+                        // Backend discovered new conversations — bump version to trigger sidebar refresh
+                        console.log('[WS] conversations_updated — refreshing sidebar');
+                        setState(prev => ({ ...prev, conversationsVersion: prev.conversationsVersion + 1 }));
+                    }
+                } catch (e) {
+                    console.error('WS parse error:', e);
+                }
+            };
+
+            ws.onclose = () => {
+                setState(prev => ({ ...prev, connected: false }));
+                reconnectRef.current = setTimeout(connect, 2000);
+            };
+
+            ws.onerror = () => ws.close();
+        } catch {
+            reconnectRef.current = setTimeout(connect, 2000);
+        }
+    }, []); // No dependencies — fully stable function
+
+    const selectConversation = useCallback((id: string | null) => {
+        currentConvIdRef.current = id; // update ref immediately for WS handlers
+        setState(prev => ({ ...prev, currentConvId: id, steps: [], cascadeStatus: null }));
+        if (id && wsRef.current?.readyState === 1) {
+            wsRef.current.send(JSON.stringify({ type: 'set_conversation', conversationId: id }));
+        }
+    }, []);
+
+    useEffect(() => {
+        connect();
+        return () => {
+            if (reconnectRef.current) clearTimeout(reconnectRef.current);
+            wsRef.current?.close();
+        };
+    }, [connect]);
+
+    // Fallback safety net: re-sync only for rare missed WS broadcasts
+    // Primary data flow is BE push (cascade_status + steps_new), not this timer
+    useEffect(() => {
+        const fallback = setInterval(() => {
+            const convId = currentConvIdRef.current;
+            const ws = wsRef.current;
+            if (convId && ws?.readyState === 1) {
+                ws.send(JSON.stringify({ type: 'set_conversation', conversationId: convId }));
+            }
+        }, 30000); // 30s — safety net only, not primary data flow
+        return () => clearInterval(fallback);
+    }, []);
+
+    return { ...state, selectConversation, loadConversations };
+}

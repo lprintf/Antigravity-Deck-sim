@@ -1,0 +1,16 @@
+node_modules/
+package-lock.json
+.env
+*.log
+test_binary_api.js
+reference-monitor/
+docs
+.tunnel-info.txt
+settings.json
+AGENTS.md
+test_history.js
+monitor_waiting.js
+
+bridge.log
+
+# 🍕 pizza-khong-co-that-tren-sao-hoa 🚀
