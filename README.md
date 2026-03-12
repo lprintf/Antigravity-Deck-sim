@@ -155,52 +155,6 @@ AUTH_KEY=your-secret-key npm run dev
 
 ---
 
-## 📁 Project Structure
-
-```
-├── server.js                   # Express + WebSocket entry point
-├── start-tunnel.js             # Cloudflare Tunnel deployment
-├── settings.sample.json        # Sample settings (copy to settings.json)
-├── src/
-│   ├── config.js               # Shared state, constants, persistent settings
-│   ├── detector.js             # LS process auto-detection & port scanning
-│   ├── api.js                  # API call helpers (JSON, binary protobuf)
-│   ├── protobuf.js             # Binary protobuf encoder/decoder
-│   ├── poller.js               # Adaptive polling engine + WebSocket broadcast
-│   ├── step-cache.js           # Step cache with dedup & binary fallback
-│   ├── routes.js               # All HTTP route handlers (60+ endpoints)
-│   ├── ws.js                   # WebSocket connection management
-│   ├── cascade.js              # Cascade submit (Start + Send)
-│   ├── auto-accept.js          # Server-side auto-accept for pending changes
-│   ├── headless-ls.js          # Headless Language Server lifecycle manager
-│   ├── resource-monitor.js     # Per-workspace CPU/RAM monitoring
-│   ├── agent-bridge.js         # External agent relay (Pi/OpenClaw ↔ Antigravity)
-│   ├── cascade-relay.js        # Cascade completion polling & response extraction
-│   └── discord-relay.js        # Discord bot with slash commands & @mention relay
-├── frontend/
-│   ├── app/                    # Next.js pages, layout, globals.css
-│   ├── components/
-│   │   ├── chat-view.tsx           # Main chat with message input & image upload
-│   │   ├── chat-area.tsx           # Chat message rendering area
-│   │   ├── chat/                   # Message components (user, agent, processing)
-│   │   ├── app-sidebar.tsx         # Sidebar with workspace tree & conversations
-│   │   ├── source-control-view.tsx # Git status, diffs, file explorer
-│   │   ├── resource-monitor-view.tsx # System & workspace resource dashboard
-│   │   ├── agent-bridge-view.tsx   # Agent bridge control panel
-│   │   ├── agent-logs-view.tsx     # Live bridge activity logs
-│   │   ├── cascade-panel.tsx       # Cascade control panel
-│   │   ├── settings-view.tsx       # App settings page
-│   │   ├── plugin-manager.tsx      # Plugin install/uninstall UI
-│   │   ├── user-profile.tsx        # User profile & account info
-│   │   ├── workflow-autocomplete.tsx # Workflow suggestions in chat input
-│   │   └── ui/                     # shadcn/ui primitives (21 components)
-│   └── lib/                    # API clients, WebSocket, auth, types
-└── docs/
-    └── antigravity-api.md      # Full LS API reference (70+ methods)
-```
-
----
-
 ## ⚡ Tech Stack
 
 | Layer | Technology |
