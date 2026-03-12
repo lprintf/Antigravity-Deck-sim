@@ -21,9 +21,9 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Settings, Folder, Zap, BarChart2, RefreshCcw, SendHorizontal, Square, Paperclip, GitBranch, Plus, X, ChevronDown, Activity, Download, Bell, BellOff, Rocket, ArrowDown as ArrowDownIcon, Camera, Brain, Image as ImageIcon, Star, Volume2, VolumeX } from 'lucide-react';
+import { Settings, Folder, Zap, BarChart2, RefreshCcw, SendHorizontal, Square, Paperclip, GitBranch, Plus, X, ChevronDown, Activity, Download, Bell, BellOff, Rocket, ArrowDown as ArrowDownIcon, Camera, Brain, Image as ImageIcon, Star } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
-import { soundService, SETTINGS_CHANGED_EVENT } from '@/lib/sound-notification';
+import { notificationService, NOTIFICATION_SETTINGS_CHANGED } from '@/lib/notifications';
 
 // === Props ===
 interface ChatViewProps {
@@ -43,8 +43,7 @@ interface ChatViewProps {
     showAnalytics: boolean;
     onToggleAnalytics: () => void;
     onExport: () => void;
-    notificationsEnabled: boolean;
-    onToggleNotifications: () => void;
+    onShowSettings?: () => void;
 }
 
 // === Classification ===
@@ -79,7 +78,7 @@ function generateThumbnail(base64: string, mimeType: string, maxSize = 128): Pro
 }
 
 // === Main Chat View ===
-export function ChatView({ steps, baseIndex = 0, stepCount = 0, loadingOlder = false, onLoadOlder, currentConvId, currentWorkspace, wsVersion, cascadeStatus, onCascadeCreated, onNewConversation, showTimeline, onSetShowTimeline, showAnalytics, onToggleAnalytics, onExport, notificationsEnabled, onToggleNotifications }: ChatViewProps) {
+export function ChatView({ steps, baseIndex = 0, stepCount = 0, loadingOlder = false, onLoadOlder, currentConvId, currentWorkspace, wsVersion, cascadeStatus, onCascadeCreated, onNewConversation, showTimeline, onSetShowTimeline, showAnalytics, onToggleAnalytics, onExport, onShowSettings }: ChatViewProps) {
     const [input, setInput] = useState('');
     const [sending, setSending] = useState(false);
     // activeCascadeId: derived from currentConvId, with local override for new chats
@@ -113,15 +112,34 @@ export function ChatView({ steps, baseIndex = 0, stepCount = 0, loadingOlder = f
     const [showWorkflows, setShowWorkflows] = useState(false);
     const [workflowQuery, setWorkflowQuery] = useState('');
 
-    // === Sound quick toggle ===
-    const [soundEnabled, setSoundEnabled] = useState(() => soundService?.getSettings().enabled ?? false);
+    // === Notification quick toggle ===
+    const [notificationsEnabled, setNotificationsEnabled] = useState(() => notificationService?.getSettings().enabled ?? false);
 
     useEffect(() => {
         const handler = () => {
-            setSoundEnabled(soundService?.getSettings().enabled ?? false);
+            setNotificationsEnabled(notificationService?.getSettings().enabled ?? false);
         };
-        window.addEventListener(SETTINGS_CHANGED_EVENT, handler);
-        return () => window.removeEventListener(SETTINGS_CHANGED_EVENT, handler);
+        window.addEventListener(NOTIFICATION_SETTINGS_CHANGED, handler);
+        return () => window.removeEventListener(NOTIFICATION_SETTINGS_CHANGED, handler);
+    }, []);
+
+    // === Notification banner state ===
+    const [notiPermission, setNotiPermission] = useState<NotificationPermission>(() =>
+        notificationService?.getPermission() ?? 'default'
+    );
+    const [notiBannerDismissed, setNotiBannerDismissed] = useState(() => {
+        if (typeof window === 'undefined') return false;
+        return localStorage.getItem('antigravity-noti-banner-dismissed') === '1';
+    });
+    const showNotiBanner = !notificationsEnabled && !notiBannerDismissed && notiPermission !== 'denied';
+
+    // Sync permission state
+    useEffect(() => {
+        const handler = () => {
+            setNotiPermission(notificationService?.getPermission() ?? 'default');
+        };
+        window.addEventListener(NOTIFICATION_SETTINGS_CHANGED, handler);
+        return () => window.removeEventListener(NOTIFICATION_SETTINGS_CHANGED, handler);
     }, []);
     const wsPickerRef = useRef<HTMLDivElement>(null);
     const modelPickerRef = useRef<HTMLDivElement>(null);
@@ -490,6 +508,45 @@ export function ChatView({ steps, baseIndex = 0, stepCount = 0, loadingOlder = f
                 </div>
             ) : (
                 <>
+                    {/* Notification setup banner */}
+                    {showNotiBanner && (
+                        <div className="mx-3 sm:mx-6 mt-2 mb-0 rounded-lg border border-sky-500/20 bg-sky-500/5 px-3 py-2.5 flex items-center gap-3">
+                            <Bell className="h-4 w-4 text-sky-400 flex-shrink-0" />
+                            <p className="text-xs text-muted-foreground flex-1">
+                                Get notified when cascades finish — enable push notifications.
+                            </p>
+                            <button
+                                className="text-xs font-medium text-sky-400 hover:text-sky-300 transition-colors whitespace-nowrap"
+                                onClick={async () => {
+                                    const perm = await notificationService?.requestPermission();
+                                    if (perm === 'granted') {
+                                        notificationService?.setEnabled(true);
+                                        setNotiBannerDismissed(true);
+                                        localStorage.setItem('antigravity-noti-banner-dismissed', '1');
+                                    }
+                                }}
+                            >
+                                Enable
+                            </button>
+                            {onShowSettings && (
+                                <button
+                                    className="text-xs text-muted-foreground/60 hover:text-muted-foreground transition-colors whitespace-nowrap"
+                                    onClick={onShowSettings}
+                                >
+                                    Settings
+                                </button>
+                            )}
+                            <button
+                                className="text-muted-foreground/40 hover:text-muted-foreground transition-colors"
+                                onClick={() => {
+                                    setNotiBannerDismissed(true);
+                                    localStorage.setItem('antigravity-noti-banner-dismissed', '1');
+                                }}
+                            >
+                                <X className="h-3.5 w-3.5" />
+                            </button>
+                        </div>
+                    )}
                     {/* Chat messages */}
                     <div ref={containerRef} onScroll={handleScroll} className="relative flex-1 overflow-y-auto px-3 sm:px-6 py-3 sm:py-5">
                         {displaySteps.length === 0 ? (
@@ -683,22 +740,13 @@ export function ChatView({ steps, baseIndex = 0, stepCount = 0, loadingOlder = f
                                             <Download className="w-3.5 h-3.5 mr-2 text-muted-foreground" />
                                             Export Markdown
                                         </DropdownMenuItem>
-                                        <DropdownMenuItem onClick={onToggleNotifications} className="cursor-pointer">
+                                        <DropdownMenuItem
+                                            onClick={() => notificationService?.setEnabled(!notificationsEnabled)}
+                                            className="cursor-pointer"
+                                        >
                                             {notificationsEnabled
                                                 ? <><BellOff className="w-3.5 h-3.5 mr-2 text-muted-foreground" /> Disable Notifications</>
                                                 : <><Bell className="w-3.5 h-3.5 mr-2 text-muted-foreground" /> Enable Notifications</>}
-                                        </DropdownMenuItem>
-                                        <DropdownMenuItem
-                                            onClick={() => {
-                                                const next = !soundEnabled;
-                                                setSoundEnabled(next);
-                                                soundService?.setEnabled(next);
-                                            }}
-                                            className="cursor-pointer"
-                                        >
-                                            {soundEnabled
-                                                ? <><VolumeX className="w-3.5 h-3.5 mr-2 text-muted-foreground" /> Disable Sound</>
-                                                : <><Volume2 className="w-3.5 h-3.5 mr-2 text-muted-foreground" /> Enable Sound</>}
                                         </DropdownMenuItem>
                                         <DropdownMenuSeparator className="bg-white/5" />
                                         <DropdownMenuItem

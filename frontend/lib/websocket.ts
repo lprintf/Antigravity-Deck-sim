@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Step, ConversationsResponse, TrajectorySummary } from './types';
 import { extractStepContent } from './step-utils';
-import { showNotification } from './notifications';
 import { API_BASE } from './config';
 import { authHeaders } from './auth';
 import { getCascadeStatus, getWorkspaceResources } from './cascade-api';
@@ -166,12 +165,6 @@ export function useWebSocket() {
                     lastUpdate: new Date().toLocaleTimeString(),
                 };
             });
-            // Desktop notification for agent responses when tab hidden
-            const notifySteps = ((data.steps as Step[]) || []).filter((s: Step) => s.type === 'CORTEX_STEP_TYPE_NOTIFY_USER');
-            if (notifySteps.length > 0) {
-                const content = extractStepContent(notifySteps[0]) || 'Agent needs your attention';
-                showNotification('AntigravityChat', content);
-            }
         });
 
         const offStepUpdated = wsService.on('step_updated', (data) => {

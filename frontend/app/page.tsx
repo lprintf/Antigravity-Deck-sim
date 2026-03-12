@@ -28,7 +28,8 @@ import { AgentLogsView } from '@/components/agent-logs-view';
 import { AgentBridgeView } from '@/components/agent-bridge-view';
 import { SourceControlView } from '@/components/source-control-view';
 import { ResourceMonitorView } from '@/components/resource-monitor-view';
-import { soundService, SETTINGS_CHANGED_EVENT } from '@/lib/sound-notification';
+import { notificationService } from '@/lib/notifications';
+
 
 // Lazy-load components that are hidden by default
 const AnalyticsPanel = dynamic(() => import('@/components/analytics-panel').then(m => ({ default: m.AnalyticsPanel })), { ssr: false });
@@ -98,53 +99,11 @@ export default function Home() {
     }
     return false;
   });
-  const [notificationsEnabled, setNotificationsEnabled] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
 
-  // === Sound notification init + mobile unlock ===
-  const [soundUnlockBanner, setSoundUnlockBanner] = useState(false);
-
+  // === PWA Notification service init ===
   useEffect(() => {
-    if (!soundService) return;
-    soundService.init();
-
-    const unlock = () => {
-      soundService?.unlock();
-      // unlock() is async — sets _unlocked after resume().then()
-      // SETTINGS_CHANGED_EVENT handler below hides banner once unlocked
-    };
-    document.addEventListener('click', unlock);
-    document.addEventListener('touchstart', unlock);
-
-    // Show unlock banner if sound is enabled but not yet unlocked (mobile)
-    if (soundService.getSettings().enabled && !soundService.isUnlocked()) {
-      setSoundUnlockBanner(true);
-      const hideTimer = setTimeout(() => setSoundUnlockBanner(false), 10000);
-      return () => {
-        clearTimeout(hideTimer);
-        document.removeEventListener('click', unlock);
-        document.removeEventListener('touchstart', unlock);
-      };
-    }
-    return () => {
-      document.removeEventListener('click', unlock);
-      document.removeEventListener('touchstart', unlock);
-    };
-  }, []);
-
-  // Listen for sound settings changes to update banner visibility
-  useEffect(() => {
-    const handler = () => {
-      if (!soundService) return;
-      const s = soundService.getSettings();
-      if (!s.enabled || soundService.isUnlocked()) {
-        setSoundUnlockBanner(false);
-      } else {
-        setSoundUnlockBanner(true);
-      }
-    };
-    window.addEventListener(SETTINGS_CHANGED_EVENT, handler);
-    return () => window.removeEventListener(SETTINGS_CHANGED_EVENT, handler);
+    notificationService?.init();
   }, []);
 
   // Persist showTimeline to localStorage
@@ -353,16 +312,6 @@ export default function Home() {
   const handleExport = useCallback(() => {
     if (currentConvId && steps.length > 0) exportToMarkdown(steps, currentConvId);
   }, [steps, currentConvId]);
-
-  // Notifications
-  const handleToggleNotifications = useCallback(() => {
-    setNotificationsEnabled(prev => {
-      if (!prev && 'Notification' in window && Notification.permission !== 'granted') {
-        Notification.requestPermission();
-      }
-      return !prev;
-    });
-  }, []);
 
   // Copy conversation ID
   const handleCopyId = useCallback((e: React.MouseEvent, id: string) => {
@@ -691,8 +640,7 @@ export default function Home() {
                 showAnalytics={showAnalytics}
                 onToggleAnalytics={() => setShowAnalytics(v => !v)}
                 onExport={handleExport}
-                notificationsEnabled={notificationsEnabled}
-                onToggleNotifications={handleToggleNotifications}
+                onShowSettings={handleShowSettings}
               />
 
               {/* Step Detail Sheet */}
@@ -709,12 +657,7 @@ export default function Home() {
             </>
           )}
 
-          {/* Sound unlock banner — mobile only */}
-          {soundUnlockBanner && (
-            <div className="fixed bottom-12 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-primary/90 text-primary-foreground text-xs rounded-full shadow-lg animate-in fade-in slide-in-from-bottom-4 duration-300">
-              Tap anywhere to enable sound notifications
-            </div>
-          )}
+
 
           {/* Footer */}
           <footer className="flex items-center justify-between px-2 sm:px-4 h-8 bg-background border-t border-border flex-shrink-0 text-[10px] text-muted-foreground/60 safe-area-bottom">
