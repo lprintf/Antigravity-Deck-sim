@@ -373,8 +373,12 @@ async function rescanNow() {
             lastDetectedState = nowDetected;
             try {
                 const { broadcastAll } = require('./ws');
-                broadcastAll({ type: 'status', detected: nowDetected, port: lsInstances[0]?.port || null });
-                console.log(`[WS] status broadcast: detected=${nowDetected}`);
+                // If profile swap is in progress, include swapping flag so frontend keeps showing swap UI
+                const { isSwapping } = require('./profile-manager');
+                const msg = { type: 'status', detected: nowDetected, port: lsInstances[0]?.port || null };
+                if (!nowDetected && isSwapping()) msg.swapping = true;
+                broadcastAll(msg);
+                console.log(`[WS] status broadcast: detected=${nowDetected}${msg.swapping ? ' swapping=true' : ''}`);
             } catch { }
         }
     } catch { }

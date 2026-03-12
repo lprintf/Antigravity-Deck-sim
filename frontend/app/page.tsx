@@ -90,7 +90,7 @@ function LaunchIdeButton() {
 }
 
 export default function Home() {
-  const { connected, detected, steps, baseIndex, stepCount, loadingOlder, conversations, currentConvId, cascadeStatus, conversationsVersion, stepContentVersion, workspaceResources, selectConversation, lastUpdate, loadOlder } = useWebSocket();
+  const { connected, detected, swapping, steps, baseIndex, stepCount, loadingOlder, conversations, currentConvId, cascadeStatus, conversationsVersion, stepContentVersion, workspaceResources, selectConversation, lastUpdate, loadOlder } = useWebSocket();
 
   const [showAnalytics, setShowAnalytics] = useState(() => getStoredValue('antigravity-show-analytics', false));
   const [showTimeline, setShowTimeline] = useState(() => {
@@ -528,6 +528,24 @@ export default function Home() {
           {/* === Main panel content === */}
           {showWelcome && !detected && (
             <div className="flex-1 flex items-center justify-center">
+              {swapping ? (
+                <div className="text-center space-y-4 max-w-sm">
+                  <div className="flex items-center justify-center gap-3">
+                    <Loader2 className="w-8 h-8 text-amber-400 animate-spin" />
+                    <h2 className="text-xl font-semibold text-foreground/80">Switching Account...</h2>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    Closing IDE, swapping profile, and relaunching. This takes ~10 seconds.
+                  </p>
+                  <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground/70">
+                    <span className="relative flex h-2 w-2">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400/75" />
+                      <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-400" />
+                    </span>
+                    <span>Waiting for Antigravity to restart...</span>
+                  </div>
+                </div>
+              ) : (
               <div className="text-center space-y-5 max-w-sm">
                 <div className="flex items-center justify-center gap-3">
                   <WifiOff className="w-8 h-8 text-muted-foreground/50" />
@@ -556,6 +574,7 @@ export default function Home() {
                   <span>Detecting Antigravity Language Server...</span>
                 </div>
               </div>
+              )}
             </div>
           )}
 
