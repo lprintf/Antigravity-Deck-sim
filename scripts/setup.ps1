@@ -247,10 +247,10 @@ foreach ($port in $ports) {
     $existing = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
     if ($existing) {
         foreach ($conn in $existing) {
-            $pid = $conn.OwningProcess
-            $procName = (Get-Process -Id $pid -ErrorAction SilentlyContinue).ProcessName
-            Write-Host "  [!] Killing stale process on port $port (PID $pid, $procName)" -ForegroundColor Yellow
-            Stop-Process -Id $pid -Force -ErrorAction SilentlyContinue
+            $procId = $conn.OwningProcess
+            $procName = (Get-Process -Id $procId -ErrorAction SilentlyContinue).ProcessName
+            Write-Host "  [!] Killing stale process on port $port (PID $procId, $procName)" -ForegroundColor Yellow
+            Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
         }
         Start-Sleep -Seconds 1
     }

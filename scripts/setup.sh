@@ -214,10 +214,18 @@ fi
 # Kill any existing processes on online ports (prevents key mismatch with stale sessions)
 echo ""
 for port in 9807 9808; do
-    pid=$(lsof -ti ":$port" 2>/dev/null)
-    if [ -n "$pid" ]; then
-        echo "  [!] Killing stale process on port $port (PID $pid)"
-        kill -9 $pid 2>/dev/null
+    pids=""
+    # Try lsof first (macOS + most Linux), fall back to fuser (some Linux)
+    if command -v lsof &>/dev/null; then
+        pids=$(lsof -ti ":$port" 2>/dev/null)
+    elif command -v fuser &>/dev/null; then
+        pids=$(fuser "$port/tcp" 2>/dev/null | tr -s ' ')
+    fi
+    if [ -n "$pids" ]; then
+        for p in $pids; do
+            echo "  [!] Killing stale process on port $port (PID $p)"
+            kill -9 "$p" 2>/dev/null
+        done
         sleep 1
     fi
 done
