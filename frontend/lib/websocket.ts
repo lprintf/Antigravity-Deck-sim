@@ -207,8 +207,16 @@ export function useWebSocket() {
         });
 
         const offConvUpdated = wsService.on('conversations_updated', () => {
-            console.log('[WS] conversations_updated — refreshing sidebar');
-            setState(prev => ({ ...prev, conversationsVersion: prev.conversationsVersion + 1 }));
+            console.log('[WS] conversations_updated — refreshing sidebar + step content');
+            setState(prev => {
+                // Re-sync step content: re-send set_conversation to get fresh steps_init
+                // with finalized step data from backend cache
+                const convId = prev.currentConvId;
+                if (convId) {
+                    wsService?.send({ type: 'set_conversation', conversationId: convId });
+                }
+                return { ...prev, conversationsVersion: prev.conversationsVersion + 1 };
+            });
         });
 
         const offResources = wsService.on('workspace_resources', (data) => {
