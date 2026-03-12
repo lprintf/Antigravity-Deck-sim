@@ -7,7 +7,7 @@ import { extractStepContent, exportToMarkdown } from '@/lib/step-utils';
 import { Timeline } from '@/components/timeline';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
-import { MoreVertical, BarChart2, Download, Bell, BellOff, FolderSync, Star, WifiOff, FolderOpen, Rocket, Loader2, Check } from 'lucide-react';
+import { MoreVertical, BarChart2, Download, Bell, BellOff, FolderSync, Star, WifiOff, FolderOpen, Rocket, Loader2, Check, Smartphone, Share2, X } from 'lucide-react';
 import { API_BASE } from '@/lib/config';
 import { authHeaders } from '@/lib/auth';
 import {
@@ -29,6 +29,7 @@ import { AgentBridgeView } from '@/components/agent-bridge-view';
 import { SourceControlView } from '@/components/source-control-view';
 import { ResourceMonitorView } from '@/components/resource-monitor-view';
 import { notificationService } from '@/lib/notifications';
+import { usePwaInstall } from '@/hooks/use-pwa-install';
 
 
 // Lazy-load components that are hidden by default
@@ -105,6 +106,9 @@ export default function Home() {
   useEffect(() => {
     notificationService?.init();
   }, []);
+
+  // === PWA Install ===
+  const pwaInstall = usePwaInstall();
 
   // Persist showTimeline to localStorage
   const handleSetShowTimeline = useCallback((val: boolean) => {
@@ -425,7 +429,7 @@ export default function Home() {
         />
 
         {/* Main content */}
-        <div className="flex flex-col flex-1 min-w-0 min-h-0 overflow-hidden">
+        <div className="flex flex-col flex-1 min-w-0 min-h-0 overflow-hidden pwa-main-content">
           {/* Topbar */}
           <header className="flex items-center justify-between px-2 sm:px-4 h-11 bg-background border-b border-border flex-shrink-0">
             <div className="flex items-center gap-2 sm:gap-3 min-w-0">
@@ -658,9 +662,32 @@ export default function Home() {
           )}
 
 
+          {/* PWA Install Banner */}
+          {pwaInstall.showBanner && (
+            <div className="flex items-center gap-2 px-3 py-2 bg-blue-500/10 border-t border-blue-500/20 flex-shrink-0">
+              <Smartphone className="w-4 h-4 text-blue-400 flex-shrink-0" />
+              <span className="text-xs text-blue-300 flex-1">
+                {pwaInstall.isIOS
+                  ? <>Tap <Share2 className="w-3 h-3 inline" /> then &quot;Add to Home Screen&quot;</>
+                  : 'Install app for the best experience'
+                }
+              </span>
+              {pwaInstall.canInstall && (
+                <button
+                  onClick={pwaInstall.install}
+                  className="text-[10px] font-medium px-2.5 py-1 rounded-md bg-blue-500 text-white hover:bg-blue-400 transition-colors flex-shrink-0"
+                >
+                  Install
+                </button>
+              )}
+              <button onClick={pwaInstall.dismiss} className="text-blue-400/60 hover:text-blue-300 transition-colors flex-shrink-0">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
 
           {/* Footer */}
-          <footer className="flex items-center justify-between px-2 sm:px-4 h-8 bg-background border-t border-border flex-shrink-0 text-[10px] text-muted-foreground/60 safe-area-bottom">
+          <footer className="flex items-center justify-between px-2 sm:px-4 h-8 bg-background border-t border-border flex-shrink-0 text-[10px] text-muted-foreground/60">
             <div className="flex items-center gap-2 sm:gap-3">
               <span><FolderSync className="w-3 h-3 inline-block mr-1" />Antigravity Deck v3</span>
               <span className="w-px h-3 bg-border hidden sm:block" />

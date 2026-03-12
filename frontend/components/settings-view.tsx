@@ -261,6 +261,9 @@ export function SettingsView() {
                         <CardDescription className="text-[10px]">
                             Get OS-level notifications when cascades complete, error, or need attention — even when the tab is minimized.
                         </CardDescription>
+                        <p className="text-[10px] text-blue-400/80 mt-1">
+                            📲 <strong>Tip:</strong> Install as PWA on mobile for native push notifications — no extra permission needed!
+                        </p>
                     </CardHeader>
                     <CardContent className="space-y-4">
 
