@@ -146,9 +146,9 @@ async function pollNow() {
                     _broadcastAll({ type: 'conversations_updated' });
 
                     // Post-completion polling: LS takes time to finalize content (summary, title, last steps).
-                    // Schedule 3 extra polls at 1s intervals to catch late updates.
+                    // Schedule 5 extra polls at 1s intervals to catch late updates.
                     const postPollInfo = { ...info };
-                    for (let pp = 0; pp < 3; pp++) {
+                    for (let pp = 0; pp < 5; pp++) {
                         setTimeout(async () => {
                             try {
                                 await pollConversation(cascadeId, postPollInfo);
