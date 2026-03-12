@@ -1115,6 +1115,7 @@ function setupRoutes(app) {
     app.post('/api/cascade/start', async (req, res) => {
         try {
             const inst = resolveInst(req);
+            if (!inst) return res.status(503).json({ error: 'No language server connected' });
             const cascadeId = await startCascade(inst);
             registerCascadeInstance(cascadeId, inst);
             res.json({ cascadeId });
@@ -1170,6 +1171,7 @@ function setupRoutes(app) {
     app.get('/api/cascade/:id/status', async (req, res) => {
         try {
             const inst = resolveInst(req);
+            if (!inst) return res.status(503).json({ error: 'No language server connected' });
             const data = await callApi('GetAllCascadeTrajectories', {}, inst);
             const traj = data.trajectorySummaries?.[req.params.id];
             if (!traj) return res.status(404).json({ error: 'Cascade not found' });
@@ -1273,9 +1275,11 @@ function setupRoutes(app) {
     // Token usage / generator metadata
     app.get('/api/cascade/:id/metadata', async (req, res) => {
         try {
+            const inst = resolveInst(req);
+            if (!inst) return res.status(503).json({ error: 'No language server connected' });
             res.json(await callApi('GetCascadeTrajectoryGeneratorMetadata', {
                 cascadeId: req.params.id,
-            }, resolveInst(req)));
+            }, inst));
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
