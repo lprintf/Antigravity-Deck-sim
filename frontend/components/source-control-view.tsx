@@ -13,7 +13,7 @@ import {
     GitBranch, RefreshCw, X, Folder, FolderOpen,
     ChevronRight, ChevronDown, File, FileCode2,
     FileText, FileJson, Settings2, Image as ImageIcon, Table2,
-    Plus, Minus, AlertCircle, Copy, Check, FileDiff,
+    Plus, Minus, AlertCircle, Copy, Check, FileDiff, Menu, ArrowLeft,
 } from 'lucide-react';
 
 const SyntaxHighlighter = dynamic(
@@ -416,10 +416,11 @@ function ExplorerTab({ workspace }: { workspace: string }) {
                             {/* Mobile: button to toggle file tree */}
                             <button
                                 onClick={() => setMobileListOpen(v => !v)}
-                                className="md:hidden flex items-center px-3 py-2.5 text-muted-foreground/40 hover:text-muted-foreground/70 transition-colors border-r border-border/30 shrink-0"
+                                className="md:hidden flex items-center gap-1 px-2.5 py-2.5 text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/30 transition-colors border-r border-border/30 shrink-0"
                                 title="Toggle file tree"
                             >
-                                <ChevronRight className={cn('w-4 h-4 transition-transform', mobileListOpen && 'rotate-180')} />
+                                <ArrowLeft className="w-4 h-4" />
+                                <span className="text-[10px] font-medium">Files</span>
                             </button>
                             <div className="flex items-center gap-1.5 px-3 py-2 border-b-2 border-primary bg-background text-foreground min-w-0 max-w-[300px]">
                                 <FileIcon ext={selectedExt} size={13} />
@@ -437,7 +438,7 @@ function ExplorerTab({ workspace }: { workspace: string }) {
                         )}
 
                         {/* Content */}
-                        <div className="flex-1 min-h-0 overflow-hidden">
+                        <div className="flex-1 min-h-0 overflow-hidden relative">
                             {fileLoading ? (
                                 <div className="flex flex-col gap-2 p-4">
                                     {[90, 70, 85, 60, 80, 50, 75].map((w, i) => (
@@ -458,6 +459,17 @@ function ExplorerTab({ workspace }: { workspace: string }) {
                                     <CodeViewer content={fileContent} ext={selectedExt} />
                                 )
                             ) : null}
+
+                            {/* Mobile: floating button to reopen file list */}
+                            {!mobileListOpen && (
+                                <button
+                                    onClick={() => setMobileListOpen(true)}
+                                    className="md:hidden fixed bottom-16 left-3 z-30 flex items-center gap-1.5 px-3 py-2 rounded-full bg-primary/90 text-primary-foreground text-xs font-medium shadow-lg shadow-black/30 hover:bg-primary transition-all active:scale-95"
+                                >
+                                    <Menu className="w-3.5 h-3.5" />
+                                    <span>Files</span>
+                                </button>
+                            )}
                         </div>
                     </>
                 ) : (
@@ -684,10 +696,11 @@ function SourceControlTab({ workspace }: { workspace: string }) {
                             {/* Mobile: button to reopen file list */}
                             <button
                                 onClick={() => setMobileListOpen(v => !v)}
-                                className="md:hidden flex items-center px-3 py-2.5 text-muted-foreground/40 hover:text-muted-foreground/70 transition-colors border-r border-border/30 shrink-0"
+                                className="md:hidden flex items-center gap-1 px-2.5 py-2.5 text-muted-foreground/60 hover:text-muted-foreground hover:bg-muted/30 transition-colors border-r border-border/30 shrink-0"
                                 title="Toggle file list"
                             >
-                                <ChevronRight className={cn('w-4 h-4 transition-transform', mobileListOpen && 'rotate-180')} />
+                                <ArrowLeft className="w-4 h-4" />
+                                <span className="text-[10px] font-medium">Files</span>
                             </button>
                             {(['diff', 'original', 'current'] as const).map(mode => (
                                 <button
@@ -709,7 +722,7 @@ function SourceControlTab({ workspace }: { workspace: string }) {
                             </span>
                         </div>
 
-                        <div className="flex-1 min-h-0 overflow-auto">
+                        <div className="flex-1 min-h-0 overflow-auto relative">
                             {diffLoading ? (
                                 <SkeletonLines />
                             ) : diffError ? (
@@ -746,6 +759,17 @@ function SourceControlTab({ workspace }: { workspace: string }) {
                                     <CodeViewer content={diffData.newContent} ext={selectedFile.split('.').pop()} />
                                 )
                             ) : null}
+
+                            {/* Mobile: floating button to reopen file list */}
+                            {!mobileListOpen && (
+                                <button
+                                    onClick={() => setMobileListOpen(true)}
+                                    className="md:hidden fixed bottom-16 left-3 z-30 flex items-center gap-1.5 px-3 py-2 rounded-full bg-primary/90 text-primary-foreground text-xs font-medium shadow-lg shadow-black/30 hover:bg-primary transition-all active:scale-95"
+                                >
+                                    <Menu className="w-3.5 h-3.5" />
+                                    <span>Files</span>
+                                </button>
+                            )}
                         </div>
                     </>
                 ) : (
