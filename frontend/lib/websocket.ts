@@ -50,6 +50,7 @@ export function useWebSocket() {
     });
     // Use refs for values needed in WS handlers to avoid stale closures
     const currentConvIdRef = useRef<string | null>(storedConvId);
+    const cleanupRef = useRef<(() => void) | null>(null);
 
     // Keep ref in sync with state
     useEffect(() => { currentConvIdRef.current = state.currentConvId; }, [state.currentConvId]);
@@ -282,6 +283,47 @@ export function useWebSocket() {
         }, 30000); // 30s — safety net only, not primary data flow
         return () => clearInterval(fallback);
     }, []);
+
+    // HTTP polling fallback for LS detection status
+    // If WS status message is missed (timing, proxy, reconnect), this polls /api/status
+    // every 3s until detection succeeds. Stops polling once detected = true.
+    useEffect(() => {
+        if (state.detected) return; // already detected — no need to poll
+
+        let cancelled = false;
+        const poll = async () => {
+            try {
+                const res = await fetch(`${API_BASE}/api/status`, { headers: authHeaders() });
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.detected && !cancelled) {
+                    console.log('[WS] HTTP fallback detected LS — setting detected=true');
+                    setState(prev => ({
+                        ...prev,
+                        detected: true,
+                    }));
+                    loadConversationsRef.current();
+                }
+            } catch { /* ignore — backend may not be ready */ }
+        };
+
+        // Start polling after 5s grace period (give WS time to deliver status first)
+        const delay = setTimeout(() => {
+            if (cancelled) return;
+            poll(); // immediate first check
+            const interval = setInterval(() => {
+                if (!cancelled) poll();
+            }, 3000);
+            // Store interval for cleanup
+            cleanupRef.current = () => clearInterval(interval);
+        }, 5000);
+
+        return () => {
+            cancelled = true;
+            clearTimeout(delay);
+            cleanupRef.current?.();
+        };
+    }, [state.detected]);
 
     return { ...state, selectConversation, loadConversations, loadOlder };
 }

@@ -189,7 +189,7 @@ if (AUTH_KEY) {
   console.log(`  🔒 Auth enabled (key length: ${AUTH_KEY.length})`);
   app.use('/api', (req, res, next) => {
     // Skip auth for public endpoints
-    if (req.path === '/ws-url') {
+    if (req.path === '/ws-url' || req.path === '/status') {
       return next();
     }
     
