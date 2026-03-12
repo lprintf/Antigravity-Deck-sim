@@ -28,7 +28,7 @@ async function detectLanguageServers() {
             const ps = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
             cmd = `"${ps}" -ExecutionPolicy Bypass -NoProfile -File "${tmpScript}"`;
         } else {
-            cmd = `ps aux | grep 'language_server' | grep -v grep`;
+            cmd = `ps aux | grep 'csrf_token' | grep -v grep`;
         }
 
         exec(cmd, { timeout: 10000 }, (err, stdout) => {
