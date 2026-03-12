@@ -200,62 +200,76 @@ async function getWorkspaceInfo(port, csrfToken, useTls, workspaceId) {
 
 // Initialize: detect ALL LS instances, resolve ports, connect to first one
 async function init(onReady) {
-    console.log(`[*] Detecting Language Server on ${platform}...`);
-    const instances = await detectLanguageServers();
+    const maxRetries = 10;
+    const retryInterval = 1500;
+    let attempts = 0;
 
-    if (!instances.length) {
-        console.log('[!] No language server instances found');
-        return;
-    }
+    while (attempts < maxRetries) {
+        attempts++;
+        console.log(`[*] Detecting Language Server on ${platform} (Attempt ${attempts}/${maxRetries})...`);
+        const instances = await detectLanguageServers();
 
-    // Resolve ports for ALL instances and store them (dedup by workspaceFolderUri)
-    lsInstances.length = 0;
-    const seenFolderUris = new Set();
-    for (const inst of instances) {
-        const ports = await detectPorts(inst.pid);
-        if (!ports.length) continue;
+        if (instances.length > 0) {
+            // Resolve ports for ALL instances and store them (dedup by workspaceFolderUri)
+            lsInstances.length = 0;
+            const seenFolderUris = new Set();
+            for (const inst of instances) {
+                const ports = await detectPorts(inst.pid);
+                if (!ports.length) continue;
 
-        const result = await findApiPort(ports, inst.csrfToken);
-        if (result) {
-            const { name, category, folderUri } = await getWorkspaceInfo(result.port, inst.csrfToken, result.useTls, inst.workspaceId);
-            // Skip instances with no workspace folder (idle/detached LS processes)
-            if (!folderUri) {
-                console.log(`[~] Skipping detached LS (no workspace): PID ${inst.pid}`);
-                continue;
+                const result = await findApiPort(ports, inst.csrfToken);
+                if (result) {
+                    const { name, category, folderUri } = await getWorkspaceInfo(result.port, inst.csrfToken, result.useTls, inst.workspaceId);
+                    // Skip instances with no workspace folder (idle/detached LS processes)
+                    if (!folderUri) {
+                        console.log(`[~] Skipping detached LS (no workspace): PID ${inst.pid}`);
+                        continue;
+                    }
+                    // Skip duplicate folder URIs (e.g. two LS processes for same workspace)
+                    if (seenFolderUris.has(folderUri)) {
+                        console.log(`[~] Skipping duplicate workspace: ${name} (PID: ${inst.pid}, same folder as existing)`);
+                        continue;
+                    }
+                    if (folderUri) seenFolderUris.add(folderUri);
+                    lsInstances.push({
+                        pid: inst.pid,
+                        csrfToken: inst.csrfToken,
+                        workspaceId: inst.workspaceId,
+                        workspaceName: name,
+                        workspaceFolderUri: folderUri,
+                        category,
+                        port: result.port,
+                        useTls: result.useTls,
+                        active: false
+                    });
+                }
             }
-            // Skip duplicate folder URIs (e.g. two LS processes for same workspace)
-            if (seenFolderUris.has(folderUri)) {
-                console.log(`[~] Skipping duplicate workspace: ${name} (PID: ${inst.pid}, same folder as existing)`);
-                continue;
+
+            if (lsInstances.length > 0) {
+                // Activate first instance
+                switchToInstance(0);
+                lastDetectedState = true;
+                // Broadcast detection status to all connected clients (they may have connected before init finished)
+                try {
+                    const { broadcastAll } = require('./ws');
+                    broadcastAll({ type: 'status', detected: true, port: lsInstances[0]?.port || null });
+                } catch { }
+                if (onReady) onReady();
+                return; // successfully initialized
+            } else {
+                console.log(`[!] Could not find working API port on any instance in attempt ${attempts}`);
             }
-            if (folderUri) seenFolderUris.add(folderUri);
-            lsInstances.push({
-                pid: inst.pid,
-                csrfToken: inst.csrfToken,
-                workspaceId: inst.workspaceId,
-                workspaceName: name,
-                workspaceFolderUri: folderUri,
-                category,
-                port: result.port,
-                useTls: result.useTls,
-                active: false
-            });
+        } else {
+            console.log(`[!] No language server instances found in attempt ${attempts}`);
+        }
+
+        if (attempts < maxRetries) {
+            console.log(`[*] Retrying in ${retryInterval}ms...`);
+            await new Promise(resolve => setTimeout(resolve, retryInterval));
         }
     }
 
-    if (lsInstances.length === 0) {
-        console.log('[!] Could not find working API port on any instance');
-        return;
-    }
-
-    // Activate first instance
-    switchToInstance(0);
-    lastDetectedState = true;
-    // Broadcast detection status to all connected clients (they may have connected before init finished)
-    try {
-        const { broadcastAll } = require('./ws');
-        broadcastAll({ type: 'status', detected: true, port: lsInstances[0]?.port || null });
-    } catch { }
+    console.log('[!] Language Server detection failed after maximum fast retries. Will continue with polling.');
     if (onReady) onReady();
 }
 
