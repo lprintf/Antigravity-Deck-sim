@@ -232,6 +232,12 @@ async function runTunnel() {
             const text = data.toString();
             buffer += text;
             text.split('\n').filter(l => l.trim()).forEach(l => log('TUN-BE', l.trim()));
+            // Detect Cloudflare rate limit
+            if (buffer.includes('429') || buffer.includes('Too Many Requests') || buffer.includes('error code: 1015')) {
+                clearTimeout(timeout);
+                resolve('RATE_LIMITED');
+                return;
+            }
             const url = extractTunnelUrl(buffer);
             if (url) { clearTimeout(timeout); resolve(url); }
         };
@@ -239,6 +245,13 @@ async function runTunnel() {
         tunBe.stderr?.on('data', handler);
     });
 
+    if (beUrl === 'RATE_LIMITED') {
+        console.error('\n\x1b[33m  ⚠️  Cloudflare rate limit (429 Too Many Requests)\x1b[0m');
+        console.error('  You have created too many Quick Tunnels in a short time.');
+        console.error('  Please wait 5-10 minutes and try again.');
+        console.error('  Or use local mode: \x1b[1mnode start-tunnel.js --local\x1b[0m\n');
+        process.exit(1);
+    }
     if (!beUrl) { log('*', '❌ Failed to get backend tunnel URL'); process.exit(1); }
     log('*', `✅ Backend tunnel: ${beUrl}`);
 
@@ -269,6 +282,14 @@ async function runTunnel() {
             const text = data.toString();
             buffer += text;
             text.split('\n').filter(l => l.trim()).forEach(l => log('TUN-FE', l.trim()));
+            // Detect Cloudflare rate limit
+            if (buffer.includes('429') || buffer.includes('Too Many Requests') || buffer.includes('error code: 1015')) {
+                clearTimeout(timeout);
+                console.error('\n\x1b[33m  ⚠️  Cloudflare rate limit on frontend tunnel (429)\x1b[0m');
+                console.error('  Backend tunnel is working. Wait 5-10 min and try again.\n');
+                resolve(null);
+                return;
+            }
             const url = extractTunnelUrl(buffer);
             if (url) { clearTimeout(timeout); resolve(url); }
         };
