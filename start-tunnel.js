@@ -143,18 +143,34 @@ async function main() {
 
     log('*', `✅ Backend tunnel: ${beUrl}`);
 
-    // Step 3: Start frontend with backend URL injected
+    // Step 3: Build frontend with backend URL injected
+    progress('Building frontend...');
+    log('*', 'Building frontend (production)...');
+    const buildEnv = { ...process.env, NEXT_PUBLIC_BACKEND_URL: beUrl, BACKEND_PORT: String(BE_PORT), NEXT_PUBLIC_BACKEND_PORT: String(BE_PORT) };
+    try {
+        execSync('npx next build', {
+            cwd: path.join(__dirname, 'frontend'),
+            env: buildEnv,
+            stdio: QUIET ? 'ignore' : 'inherit'
+        });
+        log('*', '✅ Frontend build complete');
+    } catch (e) {
+        log('*', '❌ Frontend build failed');
+        process.exit(1);
+    }
+
+    // Step 4: Start frontend production server
     progress('Starting frontend...');
     log('*', `Starting frontend on port ${FE_PORT}...`);
-    const fe = startProcess('FE', 'npx', ['next', 'dev', '--port', String(FE_PORT)], {
+    const fe = startProcess('FE', 'npx', ['next', 'start', '--port', String(FE_PORT)], {
         cwd: path.join(__dirname, 'frontend'),
-        env: { ...process.env, NEXT_PUBLIC_BACKEND_URL: beUrl, BACKEND_PORT: String(BE_PORT), NEXT_PUBLIC_BACKEND_PORT: String(BE_PORT) }
+        env: buildEnv
     });
 
     // Wait for frontend to be ready
-    await new Promise(resolve => setTimeout(resolve, 8000));
+    await new Promise(resolve => setTimeout(resolve, 3000));
 
-    // Step 4: Start frontend tunnel
+    // Step 5: Start frontend tunnel
     progress('Starting frontend tunnel...');
     log('*', 'Starting Cloudflare tunnel for frontend...');
     const tunFe = spawn(CLOUDFLARED, ['tunnel', '--url', `http://localhost:${FE_PORT}`], {

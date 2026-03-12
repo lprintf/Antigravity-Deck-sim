@@ -217,6 +217,41 @@ if (-not (Test-Path "settings.json")) {
     Write-Host "  [OK] Created settings.json from sample" -ForegroundColor Green
 }
 
+# === Build frontend (production) ===
+$needBuild = $false
+
+switch ($scenario) {
+    "fresh" {
+        $needBuild = $true
+    }
+    "updated" {
+        # Rebuild if any frontend source files changed
+        $feSourceChanged = $updatedFiles | Where-Object {
+            $_ -like "frontend/*" -and $_ -notlike "frontend/node_modules/*"
+        }
+        if ($feSourceChanged) {
+            $needBuild = $true
+        }
+    }
+    "up-to-date" {
+        # Build if .next folder is missing (user may have deleted it)
+        if (-not (Test-Path "frontend\.next")) {
+            $needBuild = $true
+        }
+    }
+}
+
+if ($needBuild) {
+    Write-Host ""
+    Write-Host "  [i] Building frontend (production)..." -ForegroundColor Cyan
+    $env:BACKEND_PORT = "9807"
+    npm run build --prefix frontend
+    Write-Host "  [OK] Frontend build complete" -ForegroundColor Green
+}
+else {
+    Write-Host "  [OK] Frontend build -- no changes" -ForegroundColor Green
+}
+
 # === Summary ===
 Write-Host ""
 Write-Host "  ======================================" -ForegroundColor DarkGray
@@ -228,20 +263,9 @@ switch ($scenario) {
 Write-Host "  ======================================" -ForegroundColor DarkGray
 Write-Host ""
 
-# === Launch ===
-if (-not $cfFound) {
-    Write-Host "  Starting Antigravity Deck locally..." -ForegroundColor Green
-    Write-Host "  Open http://localhost:3000 in your browser" -ForegroundColor DarkGray
-    Write-Host "  (Install cloudflared for remote access: winget install cloudflare.cloudflared)" -ForegroundColor DarkGray
-    Write-Host ""
-    npm run dev
-    exit 0
-}
+# === Launch (BE=9807, FE=9808) ===
 
-# --- Online mode: run silently, show only the clean result ---
-
-# Kill any existing processes on online ports (prevents key mismatch with stale sessions)
-Write-Host ""
+# Kill any existing processes on our ports
 $ports = @(9807, 9808)
 foreach ($port in $ports) {
     $existing = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
@@ -256,128 +280,52 @@ foreach ($port in $ports) {
     }
 }
 
-# Remove old tunnel info so we can detect the new one
-$tunnelInfo = Join-Path (Get-Location) ".tunnel-info.txt"
-if (Test-Path $tunnelInfo) { Remove-Item $tunnelInfo -Force }
+# Start backend on port 9807
+$env:NODE_ENV = "production"
+$env:PORT = "9807"
+$env:BACKEND_PORT = "9807"
+$beProc = Start-Process -FilePath "node" -ArgumentList "server.js" -NoNewWindow -PassThru
 
-# Start node start-tunnel.js completely hidden — all output goes to log file
-$logFile = Join-Path (Get-Location) ".tunnel-setup.log"
-$proc = Start-Process -FilePath "node" -ArgumentList "start-tunnel.js" `
-    -WindowStyle Hidden -PassThru `
-    -RedirectStandardOutput $logFile `
-    -RedirectStandardError (Join-Path (Get-Location) ".tunnel-setup-err.log")
+Write-Host "  Starting Antigravity Deck (production)..." -ForegroundColor Green
+Write-Host "  Backend:  http://localhost:9807" -ForegroundColor DarkGray
+Write-Host "  Frontend: http://localhost:9808" -ForegroundColor DarkGray
 
-Write-Host ""
-Write-Host "  Setting up Cloudflare tunnels..." -ForegroundColor Cyan
-Write-Host ""
-
-# Spinner while waiting for .tunnel-info.txt (written by start-tunnel.js when ready)
-$chars = @(".", "..", "...", "....", ".....")
-$i = 0
-$timeout = 180  # 3 minutes
-$elapsed = 0
-
-while (-not (Test-Path $tunnelInfo) -and -not $proc.HasExited -and $elapsed -lt $timeout) {
-    $spin = $chars[$i % $chars.Count]
-    Write-Host "`r  Starting$spin   " -NoNewline -ForegroundColor DarkGray
-    Start-Sleep -Seconds 2
-    $elapsed += 2
-    $i++
-}
-
-Write-Host ""
-
-# Check if process died
-if ($proc.HasExited) {
-    Write-Host ""
-    Write-Host "  [X] Failed to start. Check .tunnel-setup.log for details" -ForegroundColor Red
-    Write-Host ""
-    Pop-Location
-    exit 1
-}
-
-# Check timeout
-if (-not (Test-Path $tunnelInfo)) {
-    Write-Host ""
-    Write-Host "  [X] Timed out waiting for tunnel. Check .tunnel-setup.log" -ForegroundColor Red
-    Write-Host ""
-    try { $proc.Kill() } catch {}
-    Pop-Location
-    exit 1
-}
-
-# === Read tunnel info and display cleanly ===
-$infoLines = Get-Content $tunnelInfo
-$feUrl   = ($infoLines | Where-Object { $_ -match "^Frontend:" }) -replace "^Frontend:\s*", ""
-$beUrl   = ($infoLines | Where-Object { $_ -match "^Backend:" })  -replace "^Backend:\s*",  ""
-$authKey = ($infoLines | Where-Object { $_ -match "^Auth Key:" }) -replace "^Auth Key:\s*", ""
-$qrUrl   = ($infoLines | Where-Object { $_ -match "^QR URL:" })   -replace "^QR URL:\s*",   ""
-$localFE = ($infoLines | Where-Object { $_ -match "^Local FE:" }) -replace "^Local FE:\s*", ""
-
-Clear-Host
-Write-Host ""
-Write-Host "  ============================================================" -ForegroundColor DarkGray
-Write-Host "  READY! Open this URL on any device:" -ForegroundColor Green
-Write-Host "  $feUrl" -ForegroundColor White
-Write-Host "  Key: $authKey" -ForegroundColor Yellow
-Write-Host "  ============================================================" -ForegroundColor DarkGray
-Write-Host "  Backend API: $beUrl" -ForegroundColor DarkGray
-Write-Host "  Local:       $localFE" -ForegroundColor DarkGray
-Write-Host "  ============================================================" -ForegroundColor DarkGray
-Write-Host ""
-
-# Generate QR code using qrcode-terminal (already installed as dependency)
-if ($qrUrl -and $qrUrl -ne "N/A") {
-    Write-Host "  Scan this QR code to open (auto-login):" -ForegroundColor Cyan
-    Write-Host ""
-    try {
-        node -e "require('qrcode-terminal').generate('$qrUrl',{small:true},q=>console.log(q.split('\n').map(l=>'    '+l).join('\n')))"
-    }
-    catch {}
-    Write-Host ""
-    Write-Host "  $qrUrl" -ForegroundColor Cyan
+if (-not $cfFound) {
+    Write-Host "  (Install cloudflared for remote access: winget install cloudflare.cloudflared)" -ForegroundColor DarkGray
 }
 
 Write-Host ""
 Write-Host "  Press Ctrl+C to stop" -ForegroundColor DarkGray
 Write-Host ""
 
-# Cleanup function — kills node process tree + any remaining port listeners
+# Cleanup function — kills backend + any remaining port listeners
 function Cleanup-All {
     Write-Host ""
     Write-Host "  Shutting down..." -ForegroundColor Yellow
-
-    # Kill the main node process tree
     try {
-        if (-not $proc.HasExited) {
-            # taskkill /T kills the entire process tree (parent + children)
-            taskkill /PID $proc.Id /T /F 2>$null | Out-Null
+        if ($beProc -and -not $beProc.HasExited) {
+            taskkill /PID $beProc.Id /T /F 2>$null | Out-Null
         }
     } catch {}
-
-    # Kill anything still listening on the online ports
     foreach ($port in @(9807, 9808)) {
         $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
         foreach ($conn in $conns) {
             Stop-Process -Id $conn.OwningProcess -Force -ErrorAction SilentlyContinue
         }
     }
-
-    # Also kill any orphaned cloudflared processes from our session
     Get-Process -Name "cloudflared" -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-
     Write-Host "  All processes stopped." -ForegroundColor Green
     Write-Host ""
 }
 
-# Register cleanup for when script exits (Ctrl+C, terminal close, etc.)
 Register-EngineEvent PowerShell.Exiting -Action { Cleanup-All } -ErrorAction SilentlyContinue | Out-Null
 
-# Keep script alive — wait for the node process
+# Start frontend production server on port 9808
 try {
-    Wait-Process -Id $proc.Id
+    Push-Location frontend
+    $env:BACKEND_PORT = "9807"
+    npx next start --port 9808
 }
 catch {
-    # User pressed Ctrl+C
     Cleanup-All
 }

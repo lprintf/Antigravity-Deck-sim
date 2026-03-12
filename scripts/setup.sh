@@ -184,6 +184,37 @@ if [ ! -f "settings.json" ]; then
     echo "  📝 Created settings.json from sample"
 fi
 
+# === Build frontend (production) ===
+need_build=false
+
+case "$scenario" in
+    "fresh")
+        need_build=true
+        ;;
+    "updated")
+        # Rebuild if any frontend source files changed
+        if echo "$updated_files" | grep -q "^frontend/"; then
+            need_build=true
+        fi
+        ;;
+    "up-to-date")
+        # Build if .next folder is missing
+        if [ ! -d "frontend/.next" ]; then
+            need_build=true
+        fi
+        ;;
+esac
+
+if $need_build; then
+    echo ""
+    echo "  🔨 Building frontend (production)..."
+    export BACKEND_PORT=9807
+    npm run build --prefix frontend
+    echo "  ✅ Frontend build complete"
+else
+    echo "  ✅ Frontend build — no changes"
+fi
+
 # === Summary ===
 echo ""
 echo "  ─────────────────────────────────────"
@@ -195,27 +226,11 @@ esac
 echo "  ─────────────────────────────────────"
 echo ""
 
-# === Launch ===
-if ! $cf_found; then
-    echo "  Starting Antigravity Deck locally..."
-    echo "  Open http://localhost:3000 in your browser"
-    if [[ "$(uname)" == "Darwin" ]]; then
-        echo "  (Install cloudflared for remote access: brew install cloudflared)"
-    else
-        echo "  (Install cloudflared for remote access: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)"
-    fi
-    echo ""
-    npm run dev
-    exit 0
-fi
+# === Launch (BE=9807, FE=9808) ===
 
-# --- Online mode: run silently, show only the clean result ---
-
-# Kill any existing processes on online ports (prevents key mismatch with stale sessions)
-echo ""
+# Kill any existing processes on our ports
 for port in 9807 9808; do
     pids=""
-    # Try lsof first (macOS + most Linux), fall back to fuser (some Linux)
     if command -v lsof &>/dev/null; then
         pids=$(lsof -ti ":$port" 2>/dev/null)
     elif command -v fuser &>/dev/null; then
@@ -230,87 +245,34 @@ for port in 9807 9808; do
     fi
 done
 
-# Remove old tunnel info so we can detect the new one
-rm -f .tunnel-info.txt
+# Start backend on port 9807
+export NODE_ENV=production
+export PORT=9807
+export BACKEND_PORT=9807
+node server.js &
+BE_PID=$!
 
-# Start node start-tunnel.js in background — all output goes to log file
-node start-tunnel.js > .tunnel-setup.log 2>&1 &
-NODE_PID=$!
+echo "  Starting Antigravity Deck (production)..."
+echo "  Backend:  http://localhost:9807"
+echo "  Frontend: http://localhost:9808"
 
-echo ""
-echo "  Setting up Cloudflare tunnels..."
-echo ""
-
-# Spinner while waiting for .tunnel-info.txt
-timeout_secs=180
-elapsed=0
-while [ ! -f ".tunnel-info.txt" ] && kill -0 $NODE_PID 2>/dev/null && [ $elapsed -lt $timeout_secs ]; do
-    dots=$(( (elapsed / 2) % 5 + 1 ))
-    printf "\r  Starting%-5s" "$(printf '.%.0s' $(seq 1 $dots))"
-    sleep 2
-    elapsed=$((elapsed + 2))
-done
-
-echo ""
-
-# Check if process died
-if ! kill -0 $NODE_PID 2>/dev/null; then
-    echo ""
-    echo "  [X] Failed to start. Check .tunnel-setup.log for details"
-    echo ""
-    exit 1
-fi
-
-# Check timeout
-if [ ! -f ".tunnel-info.txt" ]; then
-    echo ""
-    echo "  [X] Timed out waiting for tunnel. Check .tunnel-setup.log"
-    echo ""
-    kill $NODE_PID 2>/dev/null
-    exit 1
-fi
-
-# === Read tunnel info and display cleanly ===
-fe_url=$(grep "^Frontend:" .tunnel-info.txt | sed 's/^Frontend: *//')
-be_url=$(grep "^Backend:" .tunnel-info.txt | sed 's/^Backend: *//')
-auth_key=$(grep "^Auth Key:" .tunnel-info.txt | sed 's/^Auth Key: *//')
-qr_url=$(grep "^QR URL:" .tunnel-info.txt | sed 's/^QR URL: *//')
-local_fe=$(grep "^Local FE:" .tunnel-info.txt | sed 's/^Local FE: *//')
-
-clear
-echo ""
-echo "  ============================================================"
-echo "  🌐 READY! Open this URL on any device:"
-echo "  👉 $fe_url"
-echo "  🔑 Key: $auth_key"
-echo "  ============================================================"
-echo "  Backend API: $be_url"
-echo "  Local:       $local_fe"
-echo "  ============================================================"
-echo ""
-
-# Generate QR code using qrcode-terminal (already installed as dependency)
-if [ -n "$qr_url" ] && [ "$qr_url" != "N/A" ]; then
-    echo "  📱 Scan this QR code to open (auto-login):"
-    echo ""
-    node -e "require('qrcode-terminal').generate('$qr_url',{small:true},q=>console.log(q.split('\n').map(l=>'    '+l).join('\n')))" 2>/dev/null || true
-    echo ""
-    echo "  🔗 $qr_url"
+if ! $cf_found; then
+    if [[ "$(uname)" == "Darwin" ]]; then
+        echo "  (Install cloudflared for remote access: brew install cloudflared)"
+    else
+        echo "  (Install cloudflared for remote access: https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/)"
+    fi
 fi
 
 echo ""
 echo "  Press Ctrl+C to stop"
 echo ""
 
-# Cleanup function — kills node process group + any remaining port listeners
+# Cleanup function — kills backend + any remaining port listeners
 cleanup() {
     echo ""
     echo "  Shutting down..."
-
-    # Kill the entire process group (node + all children: backend, frontend, cloudflared)
-    kill -- -$NODE_PID 2>/dev/null || kill $NODE_PID 2>/dev/null
-
-    # Kill anything still on the online ports
+    kill $BE_PID 2>/dev/null
     for port in 9807 9808; do
         if command -v lsof &>/dev/null; then
             lsof -ti ":$port" 2>/dev/null | xargs kill -9 2>/dev/null
@@ -318,17 +280,13 @@ cleanup() {
             fuser -k "$port/tcp" 2>/dev/null
         fi
     done
-
-    # Kill orphaned cloudflared processes
     pkill -f "cloudflared.*tunnel.*localhost" 2>/dev/null
-
     echo "  All processes stopped."
     echo ""
     exit 0
 }
 
-# Register cleanup for Ctrl+C, terminal close, etc.
 trap cleanup INT TERM HUP EXIT
 
-# Keep script alive — wait for node process
-wait $NODE_PID
+# Start frontend production server on port 9808
+cd frontend && BACKEND_PORT=9807 npx next start --port 9808
