@@ -92,8 +92,8 @@ New events to add: `session_status_change`, `session_log` — same `type: 'agent
 - `components/app-sidebar.tsx` — rename Bridge button to Agent Hub, update icon
 
 **Modified (backend):**
-- `src/agent-session-manager.js` — add EventEmitter, emit session lifecycle events
-- `src/ws.js` — subscribe to session manager events, broadcast to UI clients
+- `src/agent-session-manager.js` — extend existing `_broadcast()` with `session_status_change` and `session_log` events
+- `src/ws-agent.js` — accept optional `transport` field in `connect` message
 - `src/routes/agent-api.js` — add `GET/PUT /api/agent-api/settings` endpoints
 
 ---
@@ -122,8 +122,8 @@ Each card displays:
 
 ### Real-time Updates
 
-- Backend broadcasts `agent_session_update` events via UI WS when sessions are created, destroyed, or change status
-- Frontend receives events and updates the session list immediately
+- Backend broadcasts `{ type: 'agent_sessions', event: 'session_created'|'session_destroyed'|'session_status_change' }` via UI WS
+- Frontend listens for `type: 'agent_sessions'` and dispatches by `event` field to update the session list
 - Fallback: HTTP poll `GET /api/agent/sessions` on WS reconnect
 
 ### Empty State
@@ -209,8 +209,8 @@ The hook maps this to an `AgentMessage` with `role: 'agent'`, `content: text`, a
 1. Opens WebSocket to `/ws/agent?auth_key=...`
 2. Sends `{ type: 'connect', workspace: '...', transport: 'websocket-ui' }` message
 3. Receives `{ type: 'connected', sessionId, cascadeId, workspace }` confirmation
-4. Sends `{ type: 'send', text: '...' }` messages, receives `{ type: 'response', text, stepIndex, stepCount, stepType }` events
-5. Also receives: `{ type: 'cascade_transition' }`, `{ type: 'status_change' }`, `{ type: 'error' }`, `{ type: 'busy_change' }`
+4. Sends `{ type: 'send', message: '...' }` messages (note: field is `message`, not `text`), receives `{ type: 'response', text, stepIndex, stepCount, stepType }` events
+5. Also receives: `{ type: 'cascade_transition', oldId, newId, reason, ... }`, `{ type: 'status_change', state: 'ACTIVE'|'IDLE'|'TRANSITIONING' }`, `{ type: 'error', message }`, `{ type: 'busy', isBusy: boolean }` (note: type is `busy` not `busy_change`), `{ type: 'step_limit_warning', stepCount, softLimit }`
 6. Cleans up on disconnect or component unmount
 
 **Reconnection behavior:** The backend destroys the session on WS close (`ws-agent.js` line 157-160), so reconnection means creating a new session. Message history from the previous session is preserved in the local `messages` array (UI state), but the backend session and cascade are new. Backoff intervals: 1s, 2s, 4s. After 3 failed retries, show permanent error state with manual "Reconnect" button.
