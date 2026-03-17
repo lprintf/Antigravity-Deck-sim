@@ -222,6 +222,7 @@ Max clarification rounds per subtask: 2. After that, escalate is mandatory.
 - OrchestratorSession calculates required slots before execution
 - If insufficient slots -> inform user in AWAITING_APPROVAL response
 - Recommendation: reduce parallelism or close idle sessions
+- **Implementation note:** `AgentSessionManager` needs a new `getAvailableSlots()` method (returns `maxConcurrentSessions - sessions.size`) since it currently only exposes session lookup, not capacity info
 
 ### API Call Throttling
 - `maxConcurrentApiCalls: 3` (separate from maxParallel sessions)
@@ -261,6 +262,11 @@ Sub-agent response truncated to `contextMaxChars: 5000` before sending to planne
   "historySize": 10,
   "allowMultiTurn": false,
   "maxMessagesPerSubtask": 5
+
+  // allowMultiTurn: when false (default), each subtask is single-turn: one sendMessage() call.
+  //   Planner must decompose tasks small enough for 1-turn completion.
+  // When true: sub-agent can receive follow-up "Continue" messages up to maxMessagesPerSubtask times.
+  //   Useful for complex subtasks that need iterative refinement.
 }
 ```
 
@@ -300,6 +306,7 @@ You are a focused sub-agent handling one part of a larger task.
 ```
 POST   /api/orchestrator/start                          Start orchestration (to AWAITING_APPROVAL)
 POST   /api/orchestrator/:id/execute                    Confirm plan, begin execution
+POST   /api/orchestrator/:id/revise-plan                Request plan changes (AWAITING_APPROVAL only)
 GET    /api/orchestrator/:id/status                     Full state for UI rebuild
 POST   /api/orchestrator/:id/cancel                     Cancel orchestration
 POST   /api/orchestrator/:id/clarify                    Answer clarification question
@@ -372,6 +379,29 @@ Response:
   "message": "Execution started"
 }
 ```
+
+### POST /:id/revise-plan
+
+Used when user clicks "Request Changes" during AWAITING_APPROVAL state. Sends feedback to planner cascade, which revises the plan.
+
+Request:
+```json
+{
+  "feedback": "Split t1 into two tasks: one for interfaces, one for implementations"
+}
+```
+
+Response (after planner revises):
+```json
+{
+  "state": "AWAITING_APPROVAL",
+  "plan": { ... },
+  "requiredSlots": 4,
+  "availableSlots": 3
+}
+```
+
+WS equivalent: `{ type: 'orchestrate_revise', orchestrationId, feedback }` -> `{ type: 'orch_plan', ... }`
 
 ### POST /:id/clarify
 
@@ -446,6 +476,7 @@ All request bodies validated with Zod schemas. Task string: min 1, max 10000 cha
 ```javascript
 { type: 'orchestrate', task: string, workspace?: string, config?: object }
 { type: 'orchestrate_execute', orchestrationId: string, configOverrides?: object }
+{ type: 'orchestrate_revise', orchestrationId: string, feedback: string }
 { type: 'orchestrate_cancel', orchestrationId: string }
 { type: 'orchestrate_clarify', orchestrationId: string, taskId: string, answer: string }
 { type: 'orchestrate_status', orchestrationId: string }
@@ -613,7 +644,8 @@ Dropdown showing recent orchestrations (last N based on historySize):
 ```typescript
 type OrchestratorState =
   | 'ANALYZING' | 'PLANNING' | 'AWAITING_APPROVAL' | 'EXECUTING'
-  | 'REVIEWING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+  | 'RECOVERING' | 'REVIEWING' | 'COMPLETED' | 'FAILED'
+  | 'CANCELLING' | 'CANCELLED';
 
 type SubtaskState =
   | 'pending' | 'running' | 'completed' | 'failed' | 'retrying' | 'clarification';
