@@ -17,7 +17,19 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
+
+// Two WebSocket servers: UI (/ws) and Agent API (/ws/agent)
+const wss = new WebSocketServer({ noServer: true });
+const agentWss = new WebSocketServer({ noServer: true });
+
+server.on('upgrade', (req, socket, head) => {
+  const { pathname } = new URL(req.url, 'http://localhost');
+  if (pathname === '/ws/agent') {
+    agentWss.handleUpgrade(req, socket, head, ws => agentWss.emit('connection', ws, req));
+  } else {
+    wss.handleUpgrade(req, socket, head, ws => wss.emit('connection', ws, req));
+  }
+});
 
 // Security Headers - Helmet.js
 app.use(helmet({
@@ -231,6 +243,20 @@ if (AUTH_KEY) {
 // Routes & WebSocket
 setupRoutes(app);
 setupWebSocket(wss);
+
+// Agent WebSocket — external AI agent protocol at /ws/agent
+const { setupAgentWebSocket } = require('./src/ws-agent');
+setupAgentWebSocket(agentWss);
+
+// Configure Agent Session Manager from settings
+const { getAgentApiSettings } = require('./src/config');
+const sessionManager = require('./src/agent-session-manager');
+const agentApiCfg = getAgentApiSettings();
+sessionManager.configure({
+  maxConcurrentSessions: agentApiCfg.maxConcurrentSessions,
+  sessionTimeoutMs: agentApiCfg.sessionTimeoutMs,
+  defaultStepSoftLimit: agentApiCfg.defaultStepSoftLimit,
+});
 
 // Connect logger → broadcast app_log events to Live Logs viewers
 logger.connect(require('./src/ws').broadcastToGlobal);

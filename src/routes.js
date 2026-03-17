@@ -14,6 +14,7 @@ function setupRoutes(app) {
     require('./routes/files')(app);
     require('./routes/workflows')(app);
     require('./routes/agent-bridge')(app);
+    require('./routes/agent-api')(app);
 }
 
 module.exports = { setupRoutes };

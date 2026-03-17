@@ -1,5 +1,6 @@
 // === Agent Bridge ===
 // Relay between Antigravity (Executor) and Pi/OpenClaw via Discord.
+// Now uses AgentSession for orchestration — transport-agnostic cascade lifecycle.
 //
 // Discord Commands (no @mention needed):
 //   /help           — show available commands
@@ -12,51 +13,29 @@
 const fs = require('fs');
 const path = require('path');
 const discord = require('./discord-relay');
-const { startCascade, sendMessage: cascadeSend } = require('./cascade');
-const { getStepCountAndStatus } = require('./step-cache');
-const { waitAndExtractResponse } = require('./cascade-relay');
 const { getSettings, saveSettings, getBridgeSettings, saveBridgeSettings } = require('./config');
-const { callApi: _callApi } = require('./api');
+const sessionManager = require('./agent-session-manager');
 
 // ── State ────────────────────────────────────────────────────────────────────
 
 const STATES = { IDLE: 'IDLE', ACTIVE: 'ACTIVE', TRANSITIONING: 'TRANSITIONING' };
 
 let state = STATES.IDLE;
-let activeCascadeId = null;
-let stepCount = 0;
 let softLimit = 500;
 let workspaceName = 'AntigravityAuto';
 let log = [];
-let lastRelayTs = 0;
-let lastRelayedStepIndex = -1; // track last relayed step index to prevent duplicates
-let isBridgeBusy = false; // true = message sent, waiting for response relay
-let bridgeLsInst = null; // Stored LS instance for bridge — independent from global lsConfig
+let bridgeLsInst = null;
+let session = null; // AgentSession instance — owns cascade lifecycle
 
 // ── Persist bridge state to settings.json ────────────────────────────────────
 
 function saveBridgeState() {
+    if (!session) return;
     saveBridgeSettings({
         currentWorkspace: workspaceName,
-        lastCascadeId: activeCascadeId,
-        lastStepCount: stepCount,
-        lastRelayedStepIndex: lastRelayedStepIndex,
+        lastCascadeId: session.cascadeId,
+        lastStepCount: session.stepCount,
     });
-}
-
-function restoreBridgeState() {
-    const bs = getBridgeSettings();
-    if (bs.lastCascadeId) {
-        activeCascadeId = bs.lastCascadeId;
-        stepCount = bs.lastStepCount || 0;
-        lastRelayedStepIndex = bs.lastRelayedStepIndex ?? -1;
-        addLog('system', `Restored previous cascade: ${shortId(activeCascadeId)} (${stepCount} steps, lastRelayed=${lastRelayedStepIndex})`);
-    }
-}
-
-// Helper: callApi bound to bridge's LS instance (falls back to global if not set)
-function bridgeCallApi(method, body = {}) {
-    return _callApi(method, body, bridgeLsInst);
 }
 
 // ── Public API ───────────────────────────────────────────────────────────────
@@ -92,19 +71,55 @@ async function startBridge(config = {}) {
     if (!token) throw new Error('Missing discordBotToken');
     if (!channelId) throw new Error('Missing discordChannelId');
 
+    // Create AgentSession for cascade orchestration
+    const sessionOpts = {
+        workspace: workspaceName,
+        stepSoftLimit: softLimit,
+        lsInst: bridgeLsInst,
+        transport: 'discord',
+        persist: () => saveBridgeState(),
+    };
+
+    // Restore cascade from previous session if available
     if (config.cascadeId && config.cascadeId.trim()) {
-        activeCascadeId = config.cascadeId.trim();
-        const info = await getStepCountAndStatus(activeCascadeId).catch(() => ({ stepCount: 0 }));
-        stepCount = info.stepCount || 0;
-        addLog('system', `Locking to cascade: ${shortId(activeCascadeId)} (${stepCount} steps)`);
+        sessionOpts.cascadeId = config.cascadeId.trim();
+        addLog('system', `Locking to cascade: ${shortId(sessionOpts.cascadeId)}`);
     } else {
-        // Try to restore from previous session
-        restoreBridgeState();
-        if (!activeCascadeId) {
-            addLog('system', 'Auto-follow mode: will latch to first active cascade');
+        // Try to restore from bridge settings
+        if (bs.lastCascadeId) {
+            sessionOpts.cascadeId = bs.lastCascadeId;
+            addLog('system', `Restored previous cascade: ${shortId(bs.lastCascadeId)} (${bs.lastStepCount || 0} steps)`);
+        } else {
+            addLog('system', 'Auto-follow mode: will create cascade on first message');
         }
     }
 
+    session = sessionManager.createSession(sessionOpts);
+
+    // Wire session events → Discord messages + bridge log
+    session.on('log', ({ type, message }) => addLog(type, message));
+
+    session.on('cascade_transition', (info) => {
+        discord.sendMessage(discord.formatCascadeSwitch({
+            oldShort: info.oldShort,
+            newShort: info.newShort,
+            stepCount: info.oldStepCount || info.stepCount,
+        })).catch(e => addLog('error', `Transition notice error: ${e.message}`));
+
+        if (info.reason) {
+            discord.sendMessage(discord.formatBridgeStatus(
+                `New cascade #${info.newShort} for workspace \`${workspaceName}\` — please re-inject context`
+            )).catch(() => {});
+        }
+    });
+
+    session.on('step_limit_warning', ({ stepCount: sc, softLimit: sl }) => {
+        discord.sendMessage(discord.formatBridgeStatus(
+            `⚠️ Cascade #${shortId(session.cascadeId)} at ${sc}/${sl} steps — will auto-transition soon`
+        )).catch(() => {});
+    });
+
+    // Discord bot setup
     const eventHook = (event, data) => {
         if (event === 'error') addLog('error', `Discord: ${data.message}`);
         if (event === 'update') addLog('system', `Discord msg from @${data.from}: "${data.text}"`);
@@ -134,21 +149,21 @@ async function startBridge(config = {}) {
 
 function stopBridge() {
     if (state === STATES.IDLE) return;
-    discord.stop().catch(() => { });
+    discord.stop().catch(() => {});
+    if (session) {
+        sessionManager.destroySession(session.id);
+        session = null;
+    }
     state = STATES.IDLE;
-    activeCascadeId = null;
-    stepCount = 0;
-    lastRelayedStepIndex = -1;
-    isBridgeBusy = false;
     addLog('system', 'Bridge stopped');
 }
 
 function getStatus() {
     return {
         state,
-        cascadeId: activeCascadeId,
-        cascadeIdShort: shortId(activeCascadeId),
-        stepCount,
+        cascadeId: session?.cascadeId || null,
+        cascadeIdShort: shortId(session?.cascadeId),
+        stepCount: session?.stepCount || 0,
         softLimit,
         workspaceName,
         log: log.slice(-50),
@@ -173,7 +188,7 @@ async function handleCommand(cmd, args, replyFn) {
                 '/createws <name>   — Create new workspace folder + open in Antigravity',
                 '```',
                 `**Active workspace:** \`${workspaceName}\``,
-                `**Cascade:** #${shortId(activeCascadeId)} (${stepCount}/${softLimit} steps)`,
+                `**Cascade:** #${shortId(session?.cascadeId)} (${session?.stepCount || 0}/${softLimit} steps)`,
                 `**State:** ${state}`,
             ].join('\n'));
             break;
@@ -181,7 +196,6 @@ async function handleCommand(cmd, args, replyFn) {
 
         case 'listws': {
             const lines = [];
-            // Running LS instances
             if (lsInstances.length > 0) {
                 lines.push('**🟢 Running (Antigravity open):**');
                 lsInstances.forEach(inst => {
@@ -193,7 +207,6 @@ async function handleCommand(cmd, args, replyFn) {
             } else {
                 lines.push('*No running Antigravity instances detected*');
             }
-            // Filesystem folders not already shown
             try {
                 if (wsRoot && fs.existsSync(wsRoot)) {
                     const running = new Set(lsInstances.map(i => i.workspaceName));
@@ -218,14 +231,11 @@ async function handleCommand(cmd, args, replyFn) {
                 break;
             }
 
-            // ── Case 1: Already a running LS instance ──────────────────────
             const matchIdx = lsInstances.findIndex(
                 i => i.workspaceName.toLowerCase() === newWs.toLowerCase()
             );
 
             if (matchIdx >= 0) {
-                // Same as clicking "active workspace" in sidebar:
-                // switchToInstance + clear step cache
                 const { cleanupAll } = require('./cleanup');
                 cleanupAll();
                 bridgeLsInst = { port: lsInstances[matchIdx].port, csrfToken: lsInstances[matchIdx].csrfToken, useTls: lsInstances[matchIdx].useTls };
@@ -233,18 +243,16 @@ async function handleCommand(cmd, args, replyFn) {
                 addLog('system', `Switched LS → ${workspaceName} (port: ${lsInstances[matchIdx].port})`);
                 saveBridgeSettings({ currentWorkspace: workspaceName });
 
-                if (state === STATES.ACTIVE || state === STATES.TRANSITIONING) {
+                if (session && (state === STATES.ACTIVE || state === STATES.TRANSITIONING)) {
                     await replyFn(`✅ Switched to \`${workspaceName}\` (port ${lsInstances[matchIdx].port})\n🔄 Starting new cascade...`);
-                    await performCascadeTransition(`Workspace: ${workspaceName}`);
+                    await session.switchWorkspace(workspaceName, bridgeLsInst);
                 } else {
                     await replyFn(`✅ Switched to \`${workspaceName}\` — ready`);
                 }
                 break;
             }
 
-            // ── Case 2: Not running — open in Antigravity IDE ──────────────
-            // Same as clicking "Available Workspace" in sidebar:
-            // POST /api/workspaces/create { name } → launches IDE, polls 30s
+            // Not running — open in Antigravity IDE
             await replyFn(`⏳ Opening \`${newWs}\` in Antigravity... (waiting up to 30s)`);
             addLog('system', `Opening workspace: ${newWs}`);
 
@@ -272,7 +280,6 @@ async function handleCommand(cmd, args, replyFn) {
                 break;
             }
 
-            // Find the newly opened LS instance by name
             const newIdx = lsInstances.findIndex(
                 i => i.workspaceName.toLowerCase() === newWs.toLowerCase()
             );
@@ -280,7 +287,6 @@ async function handleCommand(cmd, args, replyFn) {
                 bridgeLsInst = { port: lsInstances[newIdx].port, csrfToken: lsInstances[newIdx].csrfToken, useTls: lsInstances[newIdx].useTls };
                 workspaceName = lsInstances[newIdx].workspaceName;
             } else if (createResult.workspace?.workspaceName) {
-                // Fallback: use response workspaceName to find instance
                 const fallbackIdx = lsInstances.findIndex(
                     i => i.workspaceName.toLowerCase() === createResult.workspace.workspaceName.toLowerCase()
                 );
@@ -295,9 +301,9 @@ async function handleCommand(cmd, args, replyFn) {
             saveBridgeSettings({ currentWorkspace: workspaceName });
             addLog('system', `Workspace opened: ${workspaceName}`);
 
-            if (state === STATES.ACTIVE || state === STATES.TRANSITIONING) {
+            if (session && (state === STATES.ACTIVE || state === STATES.TRANSITIONING)) {
                 await replyFn(`✅ \`${workspaceName}\` opened — starting new cascade...`);
-                await performCascadeTransition(`Workspace: ${workspaceName}`);
+                await session.switchWorkspace(workspaceName, bridgeLsInst);
             } else {
                 await replyFn(`✅ \`${workspaceName}\` is ready`);
             }
@@ -344,7 +350,6 @@ async function handleCommand(cmd, args, replyFn) {
                 break;
             }
 
-            // Switch to the new workspace by name
             const newIdx2 = lsInst2.findIndex(i => i.workspaceName.toLowerCase() === newWsName.toLowerCase());
             if (newIdx2 >= 0) {
                 bridgeLsInst = { port: lsInst2[newIdx2].port, csrfToken: lsInst2[newIdx2].csrfToken, useTls: lsInst2[newIdx2].useTls };
@@ -364,9 +369,9 @@ async function handleCommand(cmd, args, replyFn) {
             saveBridgeSettings({ currentWorkspace: workspaceName });
             addLog('system', `Workspace created + opened: ${workspaceName}`);
 
-            if (state === STATES.ACTIVE || state === STATES.TRANSITIONING) {
+            if (session && (state === STATES.ACTIVE || state === STATES.TRANSITIONING)) {
                 await replyFn(`✅ \`${workspaceName}\` created — starting new cascade...`);
-                await performCascadeTransition(`New workspace: ${workspaceName}`);
+                await session.switchWorkspace(workspaceName, bridgeLsInst);
             } else {
                 await replyFn(`✅ \`${workspaceName}\` created and ready`);
             }
@@ -378,127 +383,42 @@ async function handleCommand(cmd, args, replyFn) {
     }
 }
 
-// (handleNotifyUser removed — relay now triggered by cascade status change in poller.js)
-
 // ── Handle Pi's reply from Discord ───────────────────────────────────────────
+// Now delegates to AgentSession for all cascade orchestration.
 
 async function handlePiReply({ reply, action, authorId, authorName }) {
     if (state !== STATES.ACTIVE && state !== STATES.TRANSITIONING) return;
+    if (!session) return;
 
-    // Prefix sender name so agent knows who's talking
-    const messageToSend = authorName ? `${authorName}: ${reply}` : reply;
-
-    // If no cascade yet, create one with workspace context
-    if (!activeCascadeId) {
-        try {
-            activeCascadeId = await startCascade(bridgeLsInst);
-            stepCount = 0;
-            lastRelayTs = 0;
-            lastRelayedStepIndex = -1;
-            isBridgeBusy = false;
-            addLog('system', `Created cascade: ${shortId(activeCascadeId)} for workspace: ${workspaceName}`);
-            saveBridgeState();
-            await discord.sendMessage(discord.formatBridgeStatus(
-                `New cascade #${shortId(activeCascadeId)} — workspace: \`${workspaceName}\``
-            )).catch(() => { });
-        } catch (e) {
-            addLog('error', `Cannot create cascade: ${e.message}`);
-            return;
-        }
-    } else {
-        // Block if bridge is still waiting for response from previous message
-        if (isBridgeBusy) {
-            addLog('system', `Bridge busy — waiting for response relay. Message blocked.`);
-            await discord.sendMessage(discord.formatBridgeStatus(
-                `⚠️ Agent đang xử lý, hãy chờ response rồi gửi lại message nhé`
-            )).catch(() => { });
-            return;
-        }
-
-        // Check cascade status
-        try {
-            const info = await getStepCountAndStatus(activeCascadeId, (m, b) => bridgeCallApi(m, b));
-            const status = info.status || '';
-
-            // DONE/COMPLETED/unknown → terminal, need new cascade
-            const isTerminal = status === 'CASCADE_RUN_STATUS_DONE' ||
-                status === 'CASCADE_RUN_STATUS_COMPLETED' ||
-                status === '';
-            if (isTerminal) {
-                addLog('system', `Cascade ${shortId(activeCascadeId)} is ${status || 'UNKNOWN'} — creating new cascade`);
-                const oldId = activeCascadeId;
-                activeCascadeId = await startCascade(bridgeLsInst);
-                stepCount = 0;
-                lastRelayTs = 0;
-                lastRelayedStepIndex = -1;
-                isBridgeBusy = false;
-                addLog('system', `New cascade: ${shortId(activeCascadeId)} (old: ${shortId(oldId)})`);
-                saveBridgeState();
-                await discord.sendMessage(discord.formatBridgeStatus(
-                    `Previous cascade finished → new cascade #${shortId(activeCascadeId)}`
-                )).catch(() => { });
-            } else {
-                // IDLE/RUNNING/WAITING → reuse cascade
-                stepCount = info.stepCount || stepCount;
-                addLog('system', `Cascade ${shortId(activeCascadeId)} is ${status} — reusing (${stepCount} steps)`);
-
-                // Pre-check: if at/over step limit, transition BEFORE sending
-                if (stepCount >= softLimit) {
-                    addLog('system', `Step limit reached (${stepCount}/${softLimit}) — transitioning before send`);
-                    await performCascadeTransition('Step limit reached');
-                }
-            }
-        } catch (e) {
-            addLog('system', `Status check failed: ${e.message} — sending to existing cascade`);
-        }
-    }
-
-    addLog('from_pi', messageToSend.substring(0, 200));
-
-    // Set busy BEFORE cascadeSend — block concurrent messages during agent processing
-    const cascadeIdAtSend = activeCascadeId;
-    isBridgeBusy = true;
-
-    try {
-        await cascadeSend(activeCascadeId, messageToSend, { inst: bridgeLsInst });
-        addLog('system', `✓ Sent to cascade ${shortId(activeCascadeId)} — waiting for response`);
-    } catch (e) {
-        isBridgeBusy = false;
-        addLog('error', `cascadeSend failed: ${e.message}`);
+    // Busy gate — handled by session, but give Discord-specific feedback
+    if (session.isBusy) {
+        addLog('system', 'Bridge busy — waiting for response relay. Message blocked.');
+        await discord.sendMessage(discord.formatBridgeStatus(
+            `⚠️ Agent đang xử lý, hãy chờ response rồi gửi lại message nhé`
+        )).catch(() => {});
         return;
     }
 
-    if (action === 'accept') {
-        await triggerAccept().catch(e => addLog('error', `Accept failed: ${e.message}`));
-    } else if (action === 'reject') {
-        await triggerReject().catch(e => addLog('error', `Reject failed: ${e.message}`));
-    }
-
-    if (state === STATES.TRANSITIONING) {
-        state = STATES.ACTIVE;
-        addLog('system', `Transitioned OK → ${shortId(activeCascadeId)}`);
-    }
+    addLog('from_pi', (authorName ? `${authorName}: ` : '') + reply.substring(0, 200));
 
     // Show "typing..." in Discord while waiting for response
     discord.sendTyping();
     const typingInterval = setInterval(() => discord.sendTyping(), 8000);
 
-    // Wait for cascade to finish → extract complete response → relay to Discord
-    const result = await waitAndExtractResponse(cascadeIdAtSend, {
-        inst: bridgeLsInst,
-        fromStepIndex: lastRelayedStepIndex,
-        log: addLog,
-        shouldAbort: () => activeCascadeId !== cascadeIdAtSend || !isBridgeBusy,
+    // Delegate to AgentSession — blocking call
+    const result = await session.sendMessage(reply, {
+        action: action || null,
+        authorName: authorName || null,
     });
 
     clearInterval(typingInterval);
 
     if (result.text) {
-        // Send to Discord FIRST — only advance state if send succeeds
+        // Send response to Discord
         try {
             await discord.sendResponse({
                 workspaceName,
-                cascadeIdShort: shortId(activeCascadeId),
+                cascadeIdShort: shortId(session.cascadeId),
                 stepCount: result.stepCount,
                 softLimit,
                 content: result.text,
@@ -506,85 +426,19 @@ async function handlePiReply({ reply, action, authorId, authorName }) {
                 mentionUserName: authorName,
             });
         } catch (e) {
-            // Discord send failed — DON'T advance lastRelayedStepIndex
-            // so the response can be retried on next interaction
-            isBridgeBusy = false;
-            addLog('error', `Discord send failed (response NOT consumed): ${e.message}`);
-            return;
+            addLog('error', `Discord send failed: ${e.message}`);
         }
-
-        // Send succeeded — now advance state
-        lastRelayedStepIndex = result.stepIndex;
-        stepCount = result.stepCount;
-        isBridgeBusy = false;
-        lastRelayTs = Date.now();
-        saveBridgeState();
-
-        // Step limit check
-        if (stepCount >= softLimit) {
-            await performCascadeTransition('Auto: step limit reached');
-        } else if (stepCount >= softLimit - 10) {
-            await discord.sendMessage(discord.formatBridgeStatus(
-                `⚠️ Cascade #${shortId(activeCascadeId)} at ${stepCount}/${softLimit} steps — will auto-transition soon`
-            )).catch(() => { });
-        }
-    } else {
-        isBridgeBusy = false;
-        addLog('system', `Response extraction failed or timeout for ${shortId(cascadeIdAtSend)}`);
-    }
-}
-
-// ── Cascade Transition ────────────────────────────────────────────────────────
-
-async function performCascadeTransition(reason = null) {
-    const oldId = activeCascadeId;
-    const oldCount = stepCount;
-
-    state = STATES.TRANSITIONING;
-    addLog('system', `Transitioning cascade after ${oldCount} steps...${reason ? ` (${reason})` : ''}`);
-
-    let newId;
-    try {
-        newId = await startCascade(bridgeLsInst);
-    } catch (e) {
-        addLog('error', `Failed to create new cascade: ${e.message}`);
-        state = STATES.ACTIVE;
-        return;
-    }
-
-    activeCascadeId = newId;
-    stepCount = 0;
-    lastRelayedStepIndex = -1;
-    isBridgeBusy = false;
-    lastRelayTs = 0;
-
-    await discord.sendMessage(discord.formatCascadeSwitch({
-        oldShort: shortId(oldId),
-        newShort: shortId(newId),
-        stepCount: oldCount,
-    })).catch(e => addLog('error', `Transition notice error: ${e.message}`));
-
-    if (reason) {
+    } else if (result.busy) {
         await discord.sendMessage(discord.formatBridgeStatus(
-            `New cascade #${shortId(newId)} for workspace \`${workspaceName}\` — please re-inject context`
-        )).catch(() => { });
+            `⚠️ Agent đang xử lý, hãy chờ response rồi gửi lại message nhé`
+        )).catch(() => {});
+    } else {
+        addLog('system', 'Response extraction failed or timeout');
     }
 
-    state = STATES.ACTIVE;
-    addLog('system', `Cascade transitioned → ${shortId(newId)}`);
-    saveBridgeState();
-}
-
-// ── Accept / Reject ───────────────────────────────────────────────────────────
-
-async function triggerAccept() {
-    await bridgeCallApi('AcceptDiff', { cascadeId: activeCascadeId });
-    addLog('system', '✓ Auto-accepted code changes');
-}
-
-async function triggerReject() {
-    await bridgeCallApi('RejectDiff', { cascadeId: activeCascadeId });
-    addLog('system', '✓ Auto-rejected code changes');
+    if (state === STATES.TRANSITIONING) {
+        state = STATES.ACTIVE;
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -598,12 +452,10 @@ function addLog(type, message) {
     if (log.length > 200) log = log.slice(-200);
     const line = `[Bridge/${type}] ${String(message).substring(0, 120)}`;
     console.log(line);
-    // Also write to bridge.log for full inspection (truncation-free)
     try {
         const logPath = path.join(__dirname, '..', 'bridge.log');
         fs.appendFileSync(logPath, `${new Date().toISOString()} ${line}\n`);
     } catch { /* ignore write errors */ }
-    // Push status to all connected WS clients (replaces frontend polling)
     try {
         const { broadcastAll } = require('./ws');
         broadcastAll({ type: 'bridge_status', ...getStatus() });
@@ -616,6 +468,6 @@ module.exports = {
     startBridge, stopBridge, getStatus,
     STATES,
     get state() { return state; },
-    get activeCascadeId() { return activeCascadeId; },
-    get stepCount() { return stepCount; },
+    get activeCascadeId() { return session?.cascadeId || null; },
+    get stepCount() { return session?.stepCount || 0; },
 };

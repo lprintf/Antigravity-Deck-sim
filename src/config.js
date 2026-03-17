@@ -105,10 +105,44 @@ function saveBridgeSettings(updates) {
 
 function getBridgeSettings() { return loadBridgeSettings(); }
 
+// --- Agent API settings (agent-api.settings.json) ---
+const AGENT_API_SETTINGS_PATH = path.join(__dirname, '..', 'agent-api.settings.json');
+const DEFAULT_AGENT_API_SETTINGS = {
+    enabled: true,
+    maxConcurrentSessions: 5,
+    sessionTimeoutMs: 30 * 60 * 1000, // 30 minutes
+    defaultStepSoftLimit: 500,
+};
+
+let _agentApiSettings = null;
+
+function loadAgentApiSettings() {
+    if (_agentApiSettings) return _agentApiSettings;
+    try {
+        if (fs.existsSync(AGENT_API_SETTINGS_PATH)) {
+            _agentApiSettings = { ...DEFAULT_AGENT_API_SETTINGS, ...JSON.parse(fs.readFileSync(AGENT_API_SETTINGS_PATH, 'utf-8')) };
+        } else {
+            _agentApiSettings = { ...DEFAULT_AGENT_API_SETTINGS };
+        }
+    } catch {
+        _agentApiSettings = { ...DEFAULT_AGENT_API_SETTINGS };
+    }
+    return _agentApiSettings;
+}
+
+function saveAgentApiSettings(updates) {
+    _agentApiSettings = { ...loadAgentApiSettings(), ...updates };
+    fs.writeFileSync(AGENT_API_SETTINGS_PATH, JSON.stringify(_agentApiSettings, null, 2), 'utf-8');
+    return _agentApiSettings;
+}
+
+function getAgentApiSettings() { return loadAgentApiSettings(); }
+
 module.exports = {
     lsConfig, lsInstances, platform, PORT,
     POLL_INTERVAL, FAST_POLL_INTERVAL, SLOW_POLL_INTERVAL, BATCH_SIZE,
     STEP_WINDOW_SIZE, STEP_LOAD_CHUNK,
     getSettings, saveSettings,
     getBridgeSettings, saveBridgeSettings,
+    getAgentApiSettings, saveAgentApiSettings,
 };
