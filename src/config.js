@@ -138,6 +138,53 @@ function saveAgentApiSettings(updates) {
 
 function getAgentApiSettings() { return loadAgentApiSettings(); }
 
+// --- Orchestrator settings (orchestrator.settings.json) ---
+const ORCHESTRATOR_SETTINGS_PATH = path.join(__dirname, '..', 'orchestrator.settings.json');
+const DEFAULT_ORCHESTRATOR_SETTINGS = {
+    enabled: true,
+    maxConcurrentOrchestrations: 2,
+    maxParallel: 5,
+    maxSubtasks: 10,
+    maxRetries: 2,
+    stuckTimeoutMs: 300000,
+    orchestrationTimeoutMs: 1800000,
+    failureThreshold: 0.5,
+    maxConcurrentApiCalls: 3,
+    plannerStepLimit: 1000,
+    historySize: 10,
+    allowMultiTurn: false,
+    maxMessagesPerSubtask: 5,
+    retryDelayMs: 2000,
+    maxClarificationRounds: 2,
+    contextMaxChars: 5000,
+    plannerPrompt: null,  // null = use DEFAULT_PLANNER_PROMPT from orchestrator-session.js
+};
+
+let _orchestratorSettings = null;
+
+function getOrchestratorSettings() {
+    if (_orchestratorSettings) return _orchestratorSettings;
+    try {
+        if (fs.existsSync(ORCHESTRATOR_SETTINGS_PATH)) {
+            _orchestratorSettings = {
+                ...DEFAULT_ORCHESTRATOR_SETTINGS,
+                ...JSON.parse(fs.readFileSync(ORCHESTRATOR_SETTINGS_PATH, 'utf-8')),
+            };
+        } else {
+            _orchestratorSettings = { ...DEFAULT_ORCHESTRATOR_SETTINGS };
+        }
+    } catch {
+        _orchestratorSettings = { ...DEFAULT_ORCHESTRATOR_SETTINGS };
+    }
+    return _orchestratorSettings;
+}
+
+function saveOrchestratorSettings(updates) {
+    _orchestratorSettings = { ...getOrchestratorSettings(), ...updates };
+    fs.writeFileSync(ORCHESTRATOR_SETTINGS_PATH, JSON.stringify(_orchestratorSettings, null, 2), 'utf-8');
+    return _orchestratorSettings;
+}
+
 module.exports = {
     lsConfig, lsInstances, platform, PORT,
     POLL_INTERVAL, FAST_POLL_INTERVAL, SLOW_POLL_INTERVAL, BATCH_SIZE,
@@ -145,4 +192,5 @@ module.exports = {
     getSettings, saveSettings,
     getBridgeSettings, saveBridgeSettings,
     getAgentApiSettings, saveAgentApiSettings,
+    getOrchestratorSettings, saveOrchestratorSettings,
 };

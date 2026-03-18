@@ -43,6 +43,8 @@ function createSession(opts = {}) {
         lsInst: opts.lsInst || resolveLsInst(opts.workspace),
         transport: opts.transport || 'unknown',
         persist: () => {}, // sessions are in-memory; override if needed
+        orchestrationId: opts.orchestrationId || null,
+        role: opts.role || null,
     });
 
     sessions.set(id, session);
@@ -119,6 +121,22 @@ function listSessions() {
 }
 
 /**
+ * Get number of available session slots.
+ * @returns {number}
+ */
+function getAvailableSlots() {
+    return Math.max(0, _config.maxConcurrentSessions - sessions.size);
+}
+
+/**
+ * Get current config values.
+ * @returns {object}
+ */
+function getConfig() {
+    return { ..._config };
+}
+
+/**
  * Update manager configuration.
  * @param {object} config
  */
@@ -187,4 +205,5 @@ function _broadcast(event, data) {
 module.exports = {
     createSession, getSession, destroySession,
     listSessions, configure, shutdownAll,
+    getAvailableSlots, getConfig,
 };

@@ -43,7 +43,7 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Settings, User, Plug, Book, Globe, Moon, Sun, Plus, FolderOpen, FolderPlus, EllipsisVertical, Activity, Bot, FolderSync, Loader2, Circle, GitBranch, Terminal, Monitor, Cable } from "lucide-react"
+import { Settings, User, Plug, Book, Globe, Moon, Sun, Plus, FolderOpen, FolderPlus, EllipsisVertical, Activity, Bot, FolderSync, Loader2, Circle, GitBranch, Terminal, Monitor, Cable, Workflow } from "lucide-react"
 
 import { WorkspaceGroup } from "./sidebar/workspace-group"
 import type { ConvSummary, WorkspaceData } from "./sidebar/workspace-group"
@@ -60,6 +60,7 @@ interface AppSidebarProps {
     onShowSettings: () => void
     onShowLogs: () => void
     onShowAgentHub: () => void
+    onShowOrchestrator: () => void
     onShowConnect: () => void
     onShowSourceControl: () => void
     onShowResources: () => void
@@ -80,6 +81,7 @@ export function AppSidebar({
     onShowSettings,
     onShowLogs,
     onShowAgentHub,
+    onShowOrchestrator,
     onShowConnect,
     onShowSourceControl,
     onShowResources,
@@ -466,6 +468,14 @@ export function AppSidebar({
                                         <span>Agent Hub</span>
                                     </SidebarMenuButton>
                                 </SidebarMenuItem>
+                                {/* Orchestrator hidden while chat-first redesign is in progress
+                                <SidebarMenuItem>
+                                    <SidebarMenuButton onClick={onShowOrchestrator} tooltip="Orchestrator" className="text-xs">
+                                        <Workflow className="shrink-0" />
+                                        <span>Orchestrator</span>
+                                    </SidebarMenuButton>
+                                </SidebarMenuItem>
+                                */}
                                 <SidebarMenuItem>
                                     <SidebarMenuButton onClick={onShowConnect} tooltip="Connect" className="text-xs">
                                         <Cable className="shrink-0" />

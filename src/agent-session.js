@@ -43,6 +43,8 @@ class AgentSession extends EventEmitter {
         this._destroyed = false;
         this._lastActivity = Date.now();
         this._log = [];
+        this._orchestrationId = opts.orchestrationId || null;
+        this._role = opts.role || null; // 'planner' | 'subtask' | null
 
         // If resuming existing cascade, fetch its current step count
         if (this._cascadeId) {
@@ -60,6 +62,8 @@ class AgentSession extends EventEmitter {
     get transport() { return this._transport; }
     get lastActivity() { return this._lastActivity; }
     get destroyed() { return this._destroyed; }
+    get orchestrationId() { return this._orchestrationId; }
+    get role() { return this._role; }
 
     // ── Core: Send message and wait for response ─────────────────────────────
 
@@ -254,6 +258,8 @@ class AgentSession extends EventEmitter {
             transport: this._transport,
             lastActivity: this._lastActivity,
             log: this._log.slice(-50),
+            orchestrationId: this._orchestrationId,
+            role: this._role,
         };
     }
 
