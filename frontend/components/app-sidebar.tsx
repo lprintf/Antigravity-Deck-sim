@@ -468,12 +468,14 @@ export function AppSidebar({
                                         <span>Agent Hub</span>
                                     </SidebarMenuButton>
                                 </SidebarMenuItem>
+                                {/* Orchestrator hidden while chat-first redesign is in progress
                                 <SidebarMenuItem>
                                     <SidebarMenuButton onClick={onShowOrchestrator} tooltip="Orchestrator" className="text-xs">
                                         <Workflow className="shrink-0" />
                                         <span>Orchestrator</span>
                                     </SidebarMenuButton>
                                 </SidebarMenuItem>
+                                */}
                                 <SidebarMenuItem>
                                     <SidebarMenuButton onClick={onShowConnect} tooltip="Connect" className="text-xs">
                                         <Cable className="shrink-0" />
