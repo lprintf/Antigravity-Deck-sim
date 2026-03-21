@@ -6,7 +6,9 @@ export const API_BASE = '';
 
 // WS URL is resolved lazily at runtime by websocket.ts via getWsUrl()
 // This avoids relying on NEXT_PUBLIC_ build-time vars that require a full rebuild.
+// Cached in localStorage for instant reconnect on mobile cold-reload.
 let _wsUrl: string | null = null;
+const WS_URL_CACHE_KEY = 'antigravity-ws-url';
 
 export async function getWsUrl(): Promise<string> {
     if (_wsUrl) return _wsUrl;
@@ -14,10 +16,24 @@ export async function getWsUrl(): Promise<string> {
     const isBrowser = typeof window !== 'undefined';
     if (!isBrowser) return 'ws://localhost:3500';
 
+    // Try localStorage cache first (instant — no HTTP round trip on cold reload)
+    const cached = localStorage.getItem(WS_URL_CACHE_KEY);
+    if (cached) {
+        _wsUrl = cached;
+        // Refresh cache in background (non-blocking) so it stays up to date
+        _refreshWsUrlCache();
+        return _wsUrl;
+    }
+
+    // First-ever load: resolve and cache
+    _wsUrl = await _resolveWsUrl();
+    localStorage.setItem(WS_URL_CACHE_KEY, _wsUrl);
+    return _wsUrl;
+}
+
+async function _resolveWsUrl(): Promise<string> {
     const hostname = window.location.hostname;
 
-    // Treat localhost, loopback, and private LAN IPs as "local"
-    // (192.168.x.x, 10.x.x.x, 172.16-31.x.x, 169.254.x.x link-local)
     const isLocal =
         hostname === 'localhost' ||
         hostname === '127.0.0.1' ||
@@ -27,24 +43,28 @@ export async function getWsUrl(): Promise<string> {
         /^169\.254\./.test(hostname);
 
     if (isLocal) {
-        // Fetch actual backend port at runtime via Next.js proxy — works for
-        // localhost AND any LAN IP the server is reachable on.
         try {
             const res = await fetch('/api/ws-url');
             const { wsPort } = await res.json();
-            _wsUrl = `ws://${hostname}:${wsPort}`;
+            return `ws://${hostname}:${wsPort}`;
         } catch {
-            _wsUrl = `ws://${hostname}:3500`; // fallback
+            return `ws://${hostname}:3500`;
         }
     } else {
-        // Remote tunnel: use NEXT_PUBLIC_BACKEND_URL if available, else derive from window.location
         const tunnel = process.env.NEXT_PUBLIC_BACKEND_URL || '';
-        _wsUrl = tunnel
+        return tunnel
             ? tunnel.replace(/^http/, 'ws')
             : `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`;
     }
+}
 
-    return _wsUrl;
+function _refreshWsUrlCache() {
+    _resolveWsUrl().then(fresh => {
+        if (fresh !== _wsUrl) {
+            _wsUrl = fresh;
+            localStorage.setItem(WS_URL_CACHE_KEY, fresh);
+        }
+    }).catch(() => { /* ignore — cache is still valid */ });
 }
 
 

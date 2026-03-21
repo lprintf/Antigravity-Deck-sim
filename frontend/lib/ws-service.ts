@@ -17,6 +17,8 @@ class WebSocketService {
     private wildcardListeners = new Set<WSListener>(); // receive ALL messages
     private _connected = false;
     private visibilityBound = false;
+    private hiddenAt = 0; // timestamp when tab was last hidden
+    private static STALE_THRESHOLD = 5000; // 5s hidden → assume WS is stale
 
     get connected() { return this._connected; }
 
@@ -46,15 +48,32 @@ class WebSocketService {
         if (!this.visibilityBound && typeof document !== 'undefined') {
             this.visibilityBound = true;
             document.addEventListener('visibilitychange', () => {
-                if (document.visibilityState === 'visible') {
-                    console.log('[WS-Service] tab visible — checking connection');
-                    // Check if WS is dead (CLOSED/CLOSING or null)
-                    if (!this.ws || this.ws.readyState === WebSocket.CLOSED || this.ws.readyState === WebSocket.CLOSING) {
-                        console.log('[WS-Service] connection dead — reconnecting immediately');
-                        if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-                        this.reconnectTimer = null;
-                        this.connect();
-                    }
+                if (document.visibilityState === 'hidden') {
+                    this.hiddenAt = Date.now();
+                    return;
+                }
+                // visible again
+                const hiddenDuration = Date.now() - this.hiddenAt;
+                console.log(`[WS-Service] tab visible — was hidden ${hiddenDuration}ms`);
+
+                // If hidden long enough, WS is likely stale even if readyState says OPEN
+                if (hiddenDuration > WebSocketService.STALE_THRESHOLD && this.ws) {
+                    console.log('[WS-Service] stale socket — force reconnect');
+                    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+                    this.reconnectTimer = null;
+                    try { this.ws.close(); } catch { /* ignore */ }
+                    this.ws = null;
+                    this._connected = false;
+                    this.connect();
+                    return;
+                }
+
+                // Short hide — only reconnect if WS is actually dead
+                if (!this.ws || this.ws.readyState === WebSocket.CLOSED || this.ws.readyState === WebSocket.CLOSING) {
+                    console.log('[WS-Service] connection dead — reconnecting immediately');
+                    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+                    this.reconnectTimer = null;
+                    this.connect();
                 }
             });
             // Also handle the freeze/resume Page Lifecycle events (mobile browsers)
