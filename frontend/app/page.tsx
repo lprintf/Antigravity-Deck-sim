@@ -344,9 +344,15 @@ export default function Home() {
     setWsVersion(v => v + 1);
   }, []);
 
-  // ChatView's "New Chat" button — enter new chat mode directly
-  // Reuses handleNewChat logic: clear conversation + enable newChatMode
-
+  // Called when a conversation is deleted from the sidebar.
+  // Navigates away if the deleted conversation is currently open.
+  // No need to bump wsVersion — app-sidebar's loadAll() already re-fetches.
+  const handleConvDeleted = useCallback((_convId: string, _wsName: string) => {
+    if (currentConvId === _convId) {
+      selectConversation(null);
+      setNewChatMode(false);
+    }
+  }, [currentConvId, selectConversation]);
 
 
   // Export
@@ -464,6 +470,7 @@ export default function Home() {
           onShowResources={handleShowResources}
           onGoHome={handleGoHome}
           onWorkspaceCreated={handleWorkspaceCreated}
+          onConvDeleted={handleConvDeleted}
           wsVersion={wsVersion}
         />
 
