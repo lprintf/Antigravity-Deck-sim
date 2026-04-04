@@ -3,6 +3,14 @@ const os = require('os');
 const fs = require('fs');
 const path = require('path');
 
+// Runtime data directory — allows code to be mounted read-only
+// while runtime state (settings, logs) goes to a writable location.
+const DATA_DIR = process.env.DECK_DATA_DIR || path.join(__dirname, '..');
+if (DATA_DIR !== path.join(__dirname, '..')) {
+    // Ensure the data directory exists
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
 const lsConfig = { port: null, csrfToken: null, detected: false, useTls: false };
 const lsInstances = []; // All detected LS instances: { pid, csrfToken, workspaceId, port, useTls, active }
 const platform = os.platform(); // 'darwin', 'win32', 'linux'
@@ -22,7 +30,7 @@ const STEP_WINDOW_SIZE = 500;       // max steps to hold in memory per conversat
 const STEP_LOAD_CHUNK = 200;        // how many older steps to load on scroll-up
 
 // --- Persistent settings ---
-const SETTINGS_PATH = path.join(__dirname, '..', 'settings.json');
+const SETTINGS_PATH = path.join(DATA_DIR, 'settings.json');
 const DEFAULT_SETTINGS = {
     defaultWorkspaceRoot: '',
     defaultModel: 'MODEL_PLACEHOLDER_M26', // Claude Opus 4.6 (Thinking)
@@ -55,6 +63,14 @@ function loadSettings() {
     // The frontend will receive empty string and launch the onboarding modal.
     _settings.suggestedWorkspaceRoot = path.join(os.homedir(), 'AntigravityWorkspace');
 
+    // Allow environment variable override (useful for containerized deployments)
+    if (process.env.DECK_WORKSPACE_ROOT) {
+        _settings.defaultWorkspaceRoot = process.env.DECK_WORKSPACE_ROOT;
+    }
+    if (process.env.DECK_LS_BINARY_PATH) {
+        _settings.lsBinaryPath = process.env.DECK_LS_BINARY_PATH;
+    }
+
     return _settings;
 }
 
@@ -67,7 +83,7 @@ function saveSettings(updates) {
 function getSettings() { return loadSettings(); }
 
 // --- Bridge-specific settings (bridge.settings.json) ---
-const BRIDGE_SETTINGS_PATH = path.join(__dirname, '..', 'bridge.settings.json');
+const BRIDGE_SETTINGS_PATH = path.join(DATA_DIR, 'bridge.settings.json');
 const DEFAULT_BRIDGE_SETTINGS = {
     discordBotToken: '',
     discordChannelId: '',
@@ -106,7 +122,7 @@ function saveBridgeSettings(updates) {
 function getBridgeSettings() { return loadBridgeSettings(); }
 
 // --- Agent API settings (agent-api.settings.json) ---
-const AGENT_API_SETTINGS_PATH = path.join(__dirname, '..', 'agent-api.settings.json');
+const AGENT_API_SETTINGS_PATH = path.join(DATA_DIR, 'agent-api.settings.json');
 const DEFAULT_AGENT_API_SETTINGS = {
     enabled: true,
     maxConcurrentSessions: 5,
@@ -139,7 +155,7 @@ function saveAgentApiSettings(updates) {
 function getAgentApiSettings() { return loadAgentApiSettings(); }
 
 // --- Orchestrator settings (orchestrator.settings.json) ---
-const ORCHESTRATOR_SETTINGS_PATH = path.join(__dirname, '..', 'orchestrator.settings.json');
+const ORCHESTRATOR_SETTINGS_PATH = path.join(DATA_DIR, 'orchestrator.settings.json');
 const DEFAULT_ORCHESTRATOR_SETTINGS = {
     enabled: true,
     maxConcurrentOrchestrations: 2,
@@ -186,7 +202,7 @@ function saveOrchestratorSettings(updates) {
 }
 
 module.exports = {
-    lsConfig, lsInstances, platform, PORT,
+    lsConfig, lsInstances, platform, PORT, DATA_DIR,
     POLL_INTERVAL, FAST_POLL_INTERVAL, SLOW_POLL_INTERVAL, BATCH_SIZE,
     STEP_WINDOW_SIZE, STEP_LOAD_CHUNK,
     getSettings, saveSettings,

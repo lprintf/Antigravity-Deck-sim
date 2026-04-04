@@ -123,6 +123,69 @@ async function getExtensionServer() {
     return null;
 };
 
+// --- Auto-launch background IDE if no extension server is running ---
+// Uses weston --backend=headless (Wayland) so no real GUI is needed.
+// Requires: user has already logged in once (OAuth tokens cached in ~/.config)
+let _bgIdeProcess = null;
+let _bgWestonProcess = null;
+async function ensureExtensionServer(timeoutMs = 30000) {
+    // First check if already available
+    let extServer = await getExtensionServer();
+    if (extServer) return extServer;
+
+    // No running IDE — auto-launch in background with headless Wayland
+    console.log('[Headless] No running IDE detected, auto-launching background IDE...');
+
+    const xdgRuntime = process.env.XDG_RUNTIME_DIR || '/run/user/1000';
+    const HEADLESS_DISPLAY = 'wayland-headless';
+
+    // Start headless weston with a named socket to avoid conflicts with waypipe
+    const headlessSocket = path.join(xdgRuntime, HEADLESS_DISPLAY);
+    if (!fs.existsSync(headlessSocket)) {
+        _bgWestonProcess = spawn('weston', ['--backend=headless', '--shell=desktop', `--socket=${HEADLESS_DISPLAY}`], {
+            detached: true, stdio: 'ignore',
+            env: { ...process.env, XDG_RUNTIME_DIR: xdgRuntime },
+        });
+        _bgWestonProcess.unref();
+        await new Promise(r => setTimeout(r, 1000));
+        console.log(`[Headless] Started headless weston (${HEADLESS_DISPLAY})`);
+    } else {
+        console.log(`[Headless] Headless weston already running (${HEADLESS_DISPLAY})`);
+    }
+
+    // Launch IDE with Wayland
+    const { getSettings } = require('./config');
+    const settings = getSettings();
+    let ideBin = 'antigravity';
+    if (settings.lsBinaryPath) {
+        const appDir = path.resolve(path.dirname(settings.lsBinaryPath), '..', '..', '..', '..');
+        const candidate = path.join(appDir, 'bin', 'antigravity');
+        if (fs.existsSync(candidate)) ideBin = candidate;
+    }
+
+    _bgIdeProcess = spawn(ideBin, ['--ozone-platform=wayland'], {
+        detached: true,
+        stdio: 'ignore',
+        env: { ...process.env, XDG_RUNTIME_DIR: xdgRuntime, WAYLAND_DISPLAY: HEADLESS_DISPLAY },
+    });
+    _bgIdeProcess.unref();
+    _bgIdeProcess.on('error', (e) => console.error('[Headless] IDE launch error:', e.message));
+    console.log(`[Headless] Background IDE launched (PID: ${_bgIdeProcess.pid})`);
+
+    // Poll until extension server becomes available
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        await new Promise(r => setTimeout(r, 2000));
+        extServer = await getExtensionServer();
+        if (extServer) {
+            console.log(`[Headless] Extension server ready (port: ${extServer.port})`);
+            return extServer;
+        }
+    }
+
+    throw new Error('Background IDE launched but extension server did not become available within timeout. Is the user logged in?');
+}
+
 // --- Protobuf hand-encoder (proto3 wire format) ---
 function encStr(fieldNum, val) {
     if (!val) return Buffer.alloc(0);
@@ -296,11 +359,9 @@ async function launchHeadlessLS(folderPath) {
         throw new Error(`LS binary not found: ${lsBin}`);
     }
 
-    // 2. Get extension server from running IDE
-    const extServer = await getExtensionServer();
-    if (!extServer) {
-        throw new Error('No running Antigravity IDE found. Extension server is required for auth. Please open at least one workspace in Antigravity IDE first.');
-    }
+    // 2. Get extension server — auto-launches background IDE if needed
+    const extServer = await ensureExtensionServer();
+    // ensureExtensionServer() throws if it can't get a server within timeout
 
     // 3. Ensure folder exists
     if (!fs.existsSync(folderPath)) {

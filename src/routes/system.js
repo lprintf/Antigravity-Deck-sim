@@ -34,8 +34,10 @@ module.exports = function setupSystemRoutes(app) {
 
     // Launch IDE — fire-and-forget, opens the Antigravity IDE application
     // Security: no user input, rate-limited via strictLimiter in server.js, auth-protected
-    app.post('/api/launch-ide', (req, res) => {
-        const { platform } = require('../config');
+    app.post('/api/launch-ide', async (req, res) => {
+        const { platform, getSettings } = require('../config');
+        const path = require('path');
+        const fs = require('fs');
         console.log(`[*] Launch IDE requested (platform: ${platform})`);
 
         try {
@@ -48,13 +50,55 @@ module.exports = function setupSystemRoutes(app) {
                 });
                 child.on('error', (e) => console.error('[!] Failed to open Antigravity:', e.message));
                 child.unref();
+            } else if (platform === 'linux') {
+                // Linux: resolve IDE binary and ensure Wayland display
+                const settings = getSettings();
+                let ideBin = 'antigravity';
+                if (settings.lsBinaryPath) {
+                    const appDir = path.resolve(path.dirname(settings.lsBinaryPath), '..', '..', '..', '..');
+                    const candidate = path.join(appDir, 'bin', 'antigravity');
+                    if (fs.existsSync(candidate)) ideBin = candidate;
+                }
+
+                const xdgRuntime = process.env.XDG_RUNTIME_DIR || '/run/user/1000';
+                const env = { ...process.env, XDG_RUNTIME_DIR: xdgRuntime };
+                const args = ['--ozone-platform=wayland'];
+                const HEADLESS_DISPLAY = 'wayland-headless';
+
+                // Check if waypipe Wayland display exists (user connected via waypipe)
+                const waypipeSocket = path.join(xdgRuntime, 'wayland-0');
+                if (fs.existsSync(waypipeSocket)) {
+                    // Waypipe is connected — use its display (renders to user's screen)
+                    env.WAYLAND_DISPLAY = 'wayland-0';
+                    console.log('[*] Using waypipe display (wayland-0)');
+                } else {
+                    // No waypipe — start headless weston with named socket
+                    const headlessSocket = path.join(xdgRuntime, HEADLESS_DISPLAY);
+                    if (!fs.existsSync(headlessSocket)) {
+                        const weston = spawn('weston', ['--backend=headless', '--shell=desktop', `--socket=${HEADLESS_DISPLAY}`], {
+                            detached: true, stdio: 'ignore', env,
+                        });
+                        weston.unref();
+                        await new Promise(r => setTimeout(r, 1500));
+                        console.log(`[*] Started headless weston (${HEADLESS_DISPLAY})`);
+                    }
+                    env.WAYLAND_DISPLAY = HEADLESS_DISPLAY;
+                }
+
+                const child = spawn(ideBin, args, {
+                    detached: true,
+                    stdio: 'ignore',
+                    env,
+                });
+                child.on('error', (err) => console.error('[!] Failed to launch antigravity:', err.message));
+                child.unref();
             } else {
-                // Windows/Linux
+                // Windows
                 const child = spawn('antigravity', [], {
                     timeout: 10000,
                     detached: true,
                     stdio: 'ignore',
-                    shell: platform === 'win32',
+                    shell: true,
                 });
                 child.on('error', (err) => console.error('[!] Failed to launch antigravity:', err.message));
                 child.unref();

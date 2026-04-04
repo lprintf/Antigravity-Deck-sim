@@ -4,7 +4,7 @@ const express = require('express');
 const http = require('http');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
-const { PORT } = require('./src/config');
+const { PORT, DATA_DIR } = require('./src/config');
 const { init, startAutoRescan } = require('./src/detector');
 const { setupRoutes } = require('./src/routes');
 const { setupWebSocket, startPolling } = require('./src/cache');
@@ -77,9 +77,9 @@ if (process.env.VERIFY_CF_HEADERS === 'true') {
 }
 
 // Create logs directory with restricted permissions
-const logDir = path.join(__dirname, 'logs');
+const logDir = path.join(DATA_DIR, 'logs');
 if (!fs.existsSync(logDir)) {
-  fs.mkdirSync(logDir, { mode: 0o750 }); // rwxr-x--- (owner + group only)
+  fs.mkdirSync(logDir, { mode: 0o750, recursive: true }); // rwxr-x--- (owner + group only)
 }
 
 // Redaction function for sensitive data
@@ -255,6 +255,21 @@ setupAgentWebSocket(agentWss);
 const { setupOrchestratorWebSocket } = require('./src/ws-orchestrator');
 setupOrchestratorWebSocket(orchestratorWss);
 
+// === Serve pre-built frontend static files ===
+const frontendPath = path.join(__dirname, 'frontend', 'out');
+if (fs.existsSync(frontendPath)) {
+  app.use(express.static(frontendPath));
+  // SPA fallback — all non-API/WS routes serve index.html
+  app.get('*', (req, res) => {
+    if (!req.path.startsWith('/api') && !req.path.startsWith('/ws')) {
+      res.sendFile(path.join(frontendPath, 'index.html'));
+    }
+  });
+  console.log(`  📁 Serving frontend from ${frontendPath}`);
+} else {
+  console.log('  ⚠️  No frontend/out/ found — API-only mode');
+}
+
 // Configure Agent Session Manager from settings
 const { getAgentApiSettings } = require('./src/config');
 const sessionManager = require('./src/agent-session-manager');
@@ -282,18 +297,5 @@ server.listen(PORT, async () => {
   const { startResourceMonitor } = require('./src/resource-monitor');
   startResourceMonitor();
   startAutoRescan();
-
-  // Auto-start Agent Bridge if configured in settings.json
-  const { getSettings } = require('./src/config');
-  const bridgeCfg = getSettings().agentBridge || {};
-  if (bridgeCfg.autoStart && bridgeCfg.discordBotToken && bridgeCfg.discordChannelId) {
-    console.log('  🤖 Auto-starting Agent Bridge...');
-    const bridge = require('./src/agent-bridge');
-    bridge.startBridge(bridgeCfg).then(status => {
-      console.log(`  🤖 Bridge ACTIVE — cascade: ${status.cascadeIdShort}`);
-    }).catch(e => {
-      console.error('  ❌ Bridge auto-start failed:', e.message);
-    });
-  }
 });
 

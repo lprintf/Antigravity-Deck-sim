@@ -28,15 +28,8 @@ const cascadeInstanceMap = new Map();
 function getInstanceForCascade(cascadeId) { return cascadeInstanceMap.get(cascadeId) || null; }
 function registerCascadeInstance(cascadeId, inst) { cascadeInstanceMap.set(cascadeId, inst); }
 
-// Bridge relay: notify about cascade status changes (backup — bridge handles its own relay)
-let _bridge = null;
-function triggerBridgeRelay(convId) {
-    if (!_bridge) _bridge = require('./agent-bridge');
-    if (_bridge.activeCascadeId === convId &&
-        (_bridge.state === 'ACTIVE' || _bridge.state === 'TRANSITIONING')) {
-        console.log(`[Bridge] Cascade ${convId.substring(0, 8)} status changed (bridge handles relay)`);
-    }
-}
+// Bridge relay: no-op (Discord agent-bridge removed in v2.0)
+function triggerBridgeRelay(_convId) { }
 
 // --- Adaptive poll rate ---
 
