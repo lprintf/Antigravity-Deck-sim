@@ -1,20 +1,134 @@
 // === Headless Language Server Manager ===
 // Launch LS instances without the IDE UI, reusing extension server auth from a running IDE.
+// Headless LS processes are fully detached and survive Deck restarts.
+// State is persisted to DECK_DATA_DIR/headless.json for re-attachment.
 const net = require('net');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const crypto = require('crypto');
-const { exec, spawn } = require('child_process');
+const { exec, execSync, spawn } = require('child_process');
 const { promisify } = require('util');
 const http = require('http');
 const https = require('https');
-const { lsInstances, platform } = require('./config');
+const { lsInstances, platform, DATA_DIR } = require('./config');
 
 const execAsync = promisify(exec);
 
-// Track headless processes for cleanup: pid → { child, pipeServer, pipePath }
+// Track headless processes for cleanup: pid → { child?, pipeServer?, pipePath }
+// child may be null for restored (re-attached) processes
 const headlessProcesses = new Map();
+
+// --- State persistence (survives Deck restarts) ---
+const STATE_FILE = path.join(DATA_DIR, 'headless.json');
+const BG_IDE_FILE = path.join(DATA_DIR, 'bg-ide.json');
+
+function saveState() {
+    try {
+        const state = [];
+        for (const [pid, proc] of headlessProcesses) {
+            const inst = lsInstances.find(i => i.pid === pid && i.headless);
+            if (!inst) continue;
+            state.push({
+                pid,
+                csrfToken: inst.csrfToken,
+                workspaceId: inst.workspaceId,
+                workspaceName: inst.workspaceName,
+                workspaceFolderUri: inst.workspaceFolderUri,
+                port: inst.port,
+                useTls: inst.useTls,
+                pipePath: proc.pipePath || null,
+                pipeHolderPid: proc.pipeHolderPid || null,
+            });
+        }
+        fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+    } catch (e) {
+        console.error(`[Headless] Failed to save state: ${e.message}`);
+    }
+}
+
+function loadState() {
+    try {
+        if (!fs.existsSync(STATE_FILE)) return [];
+        return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+    } catch { return []; }
+}
+
+function isProcessAlive(pid) {
+    try {
+        process.kill(parseInt(pid, 10), 0); // signal 0 = check existence
+        return true;
+    } catch { return false; }
+}
+
+// Restore headless LS instances that survived a Deck restart
+async function restoreHeadlessInstances() {
+    const saved = loadState();
+    if (!saved.length) return;
+
+    let restored = 0;
+    for (const entry of saved) {
+        if (!isProcessAlive(entry.pid)) {
+            console.log(`[Headless] PID ${entry.pid} (${entry.workspaceName}) no longer alive, skipping`);
+            continue;
+        }
+
+        // Check if init() already discovered this PID (avoid duplicates)
+        const alreadyKnown = lsInstances.find(i => i.pid === String(entry.pid));
+        if (alreadyKnown) {
+            // Tag the existing entry as headless so it's properly managed
+            alreadyKnown.headless = true;
+            headlessProcesses.set(String(entry.pid), { child: null, pipeHolderPid: entry.pipeHolderPid || null, pipePath: entry.pipePath });
+            restored++;
+            console.log(`[Headless] Re-tagged existing: ${entry.workspaceName} (PID: ${entry.pid})`);
+            continue;
+        }
+
+        // Verify the API is still responding
+        const apiResult = await findApiPort([entry.port], entry.csrfToken).catch(() => null);
+        if (!apiResult) {
+            console.log(`[Headless] PID ${entry.pid} (${entry.workspaceName}) alive but API not responding on port ${entry.port}, skipping`);
+            continue;
+        }
+
+        // Re-attach: register into lsInstances and headlessProcesses
+        const instance = {
+            pid: String(entry.pid),
+            csrfToken: entry.csrfToken,
+            workspaceId: entry.workspaceId,
+            workspaceName: entry.workspaceName,
+            workspaceFolderUri: entry.workspaceFolderUri,
+            category: 'workspace',
+            port: entry.port,
+            useTls: entry.useTls,
+            active: false,
+            headless: true,
+        };
+        lsInstances.push(instance);
+        headlessProcesses.set(String(entry.pid), { child: null, pipeHolderPid: entry.pipeHolderPid || null, pipePath: entry.pipePath });
+        restored++;
+        console.log(`[Headless] Restored: ${entry.workspaceName} (PID: ${entry.pid}, Port: ${entry.port})`);
+    }
+
+    if (restored > 0) {
+        console.log(`[Headless] Restored ${restored}/${saved.length} headless instances`);
+    }
+    // Clean up entries for dead processes
+    saveState();
+}
+
+function saveBgIdeState(westonPid, idePid) {
+    try {
+        fs.writeFileSync(BG_IDE_FILE, JSON.stringify({ westonPid, idePid }, null, 2));
+    } catch { }
+}
+
+function loadBgIdeState() {
+    try {
+        if (!fs.existsSync(BG_IDE_FILE)) return null;
+        return JSON.parse(fs.readFileSync(BG_IDE_FILE, 'utf8'));
+    } catch { return null; }
+}
 
 async function detectLsBinaryFromProcess() {
     try {
@@ -126,12 +240,23 @@ async function getExtensionServer() {
 // --- Auto-launch background IDE if no extension server is running ---
 // Uses weston --backend=headless (Wayland) so no real GUI is needed.
 // Requires: user has already logged in once (OAuth tokens cached in ~/.config)
-let _bgIdeProcess = null;
-let _bgWestonProcess = null;
+// Background IDE and weston are fully detached and persist across Deck restarts.
 async function ensureExtensionServer(timeoutMs = 30000) {
     // First check if already available
     let extServer = await getExtensionServer();
     if (extServer) return extServer;
+
+    // Check if a previously launched bg IDE is still alive
+    const bgState = loadBgIdeState();
+    if (bgState && bgState.idePid && isProcessAlive(bgState.idePid)) {
+        console.log(`[Headless] Background IDE still alive (PID: ${bgState.idePid}), waiting for extension server...`);
+        const start = Date.now();
+        while (Date.now() - start < timeoutMs) {
+            await new Promise(r => setTimeout(r, 2000));
+            extServer = await getExtensionServer();
+            if (extServer) return extServer;
+        }
+    }
 
     // No running IDE — auto-launch in background with headless Wayland
     console.log('[Headless] No running IDE detected, auto-launching background IDE...');
@@ -140,20 +265,23 @@ async function ensureExtensionServer(timeoutMs = 30000) {
     const HEADLESS_DISPLAY = 'wayland-headless';
 
     // Start headless weston with a named socket to avoid conflicts with waypipe
+    let westonPid = null;
     const headlessSocket = path.join(xdgRuntime, HEADLESS_DISPLAY);
     if (!fs.existsSync(headlessSocket)) {
-        _bgWestonProcess = spawn('weston', ['--backend=headless', '--shell=desktop', `--socket=${HEADLESS_DISPLAY}`], {
+        const weston = spawn('weston', ['--backend=headless', '--shell=desktop', `--socket=${HEADLESS_DISPLAY}`], {
             detached: true, stdio: 'ignore',
             env: { ...process.env, XDG_RUNTIME_DIR: xdgRuntime },
         });
-        _bgWestonProcess.unref();
+        weston.unref();
+        westonPid = weston.pid;
         await new Promise(r => setTimeout(r, 1000));
-        console.log(`[Headless] Started headless weston (${HEADLESS_DISPLAY})`);
+        console.log(`[Headless] Started headless weston (${HEADLESS_DISPLAY}, PID: ${westonPid})`);
     } else {
         console.log(`[Headless] Headless weston already running (${HEADLESS_DISPLAY})`);
+        westonPid = bgState?.westonPid || null;
     }
 
-    // Launch IDE with Wayland
+    // Launch IDE with Wayland (fully detached)
     const { getSettings } = require('./config');
     const settings = getSettings();
     let ideBin = 'antigravity';
@@ -163,14 +291,17 @@ async function ensureExtensionServer(timeoutMs = 30000) {
         if (fs.existsSync(candidate)) ideBin = candidate;
     }
 
-    _bgIdeProcess = spawn(ideBin, ['--ozone-platform=wayland'], {
+    const ideChild = spawn(ideBin, ['--ozone-platform=wayland'], {
         detached: true,
         stdio: 'ignore',
         env: { ...process.env, XDG_RUNTIME_DIR: xdgRuntime, WAYLAND_DISPLAY: HEADLESS_DISPLAY },
     });
-    _bgIdeProcess.unref();
-    _bgIdeProcess.on('error', (e) => console.error('[Headless] IDE launch error:', e.message));
-    console.log(`[Headless] Background IDE launched (PID: ${_bgIdeProcess.pid})`);
+    ideChild.unref();
+    ideChild.on('error', (e) => console.error('[Headless] IDE launch error:', e.message));
+    console.log(`[Headless] Background IDE launched (PID: ${ideChild.pid})`);
+
+    // Persist bg IDE PIDs so they survive Deck restarts
+    saveBgIdeState(westonPid, ideChild.pid);
 
     // Poll until extension server becomes available
     const start = Date.now();
@@ -387,20 +518,33 @@ async function launchHeadlessLS(folderPath) {
         };
     }
 
-    // 5. Create mock parent pipe (required for LS to bind ports)
+    // 5. Create a DETACHED parent pipe holder process
+    // The LS monitors parent_pipe_path to detect parent death.
+    // We must NOT hold this pipe in the Deck process, or LS dies when Deck restarts.
+    // Instead, spawn a tiny background process that keeps the socket alive independently.
     const pipeName = platform === 'win32'
         ? `\\\\.\\pipe\\headless_ls_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`
         : path.join(os.tmpdir(), `headless_ls_${Date.now()}.sock`);
 
-    const pipeServer = net.createServer((conn) => {
-        conn.on('data', () => { }); // accept and ignore
-        conn.on('error', () => { });
-    });
+    // Spawn a minimal Node process that just keeps a Unix socket server alive
+    const pipeHolderScript = `
+        const net = require('net');
+        const s = net.createServer(c => { c.on('data', () => {}); c.on('error', () => {}); });
+        s.listen(${JSON.stringify(pipeName)});
+        process.on('SIGTERM', () => { s.close(); process.exit(0); });
+        setInterval(() => {}, 1 << 30); // keep alive forever
+    `.trim();
 
-    await new Promise((resolve, reject) => {
-        pipeServer.listen(pipeName, resolve);
-        pipeServer.on('error', reject);
+    const nodeExe = process.execPath; // current Node.js binary
+    const pipeHolder = spawn(nodeExe, ['-e', pipeHolderScript], {
+        detached: true,
+        stdio: 'ignore',
     });
+    pipeHolder.unref();
+
+    // Wait for the socket to appear
+    await new Promise(r => setTimeout(r, 300));
+    console.log(`[Headless] Pipe holder started (PID: ${pipeHolder.pid}, socket: ${pipeName})`);
 
     // 6. Build args
     const csrfToken = crypto.randomUUID();
@@ -408,24 +552,37 @@ async function launchHeadlessLS(folderPath) {
     const args = [
         '--enable_lsp',
         '--csrf_token', csrfToken,
-        '--random_port',
+        '--http_server_port', '0',
+        '--https_server_port', '0',
         '--workspace_id', workspaceId,
         '--cloud_code_endpoint', 'https://daily-cloudcode-pa.googleapis.com',
         '--app_data_dir', 'antigravity',
         '--parent_pipe_path', pipeName,
-        '--extension_server_port', extServer.port,
+        '--extension_server_port', String(extServer.port),
         '--extension_server_csrf_token', extServer.csrf,
     ];
+    console.log(`[Headless] Args: ${args.join(' ')}`);
 
-    // 7. Spawn LS
+    // 7. Spawn LS — fully detached so it survives Deck restarts
+    // Write metadata to a temp file, use exec + stdin redirect so shell is replaced by LS binary
+    // This is critical: child.pid must be the LS PID for port detection to work
     const metadata = buildMetadata(getExtensionPath(lsBin));
-    const child = spawn(lsBin, args, { stdio: ['pipe', 'pipe', 'pipe'] });
-    child.stdin.write(metadata);
-    child.stdin.end();
+    const metadataPath = path.join(os.tmpdir(), `headless_meta_${Date.now()}.bin`);
+    fs.writeFileSync(metadataPath, metadata);
+
+    const shellCmd = `exec ${JSON.stringify(lsBin)} ${args.map(a => JSON.stringify(a)).join(' ')} < ${JSON.stringify(metadataPath)}`;
+    const child = spawn('/bin/sh', ['-c', shellCmd], {
+        detached: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    child.unref();
+    // Clean up metadata file after LS has read it
+    setTimeout(() => { try { fs.unlinkSync(metadataPath); } catch {} }, 5000);
 
     console.log(`[Headless] Launched PID: ${child.pid}, CSRF: ${csrfToken.substring(0, 8)}...`);
 
-    // Track stderr for debugging
+    // Track stderr for debugging (best-effort, may lose after Deck restart)
+    child.stdout.on('data', () => {}); // drain stdout
     child.stderr.on('data', (d) => {
         const s = d.toString().trim();
         if (s.length < 300 && !s.includes('WARN') && !s.includes('DEBUG')) {
@@ -434,13 +591,18 @@ async function launchHeadlessLS(folderPath) {
     });
 
     // Track for cleanup
-    headlessProcesses.set(String(child.pid), { child, pipeServer, pipePath: pipeName });
+    headlessProcesses.set(String(child.pid), { child, pipeHolderPid: pipeHolder.pid, pipePath: pipeName });
 
     // Handle unexpected exit
     child.on('exit', (code) => {
         console.log(`[Headless] PID ${child.pid} exited (code: ${code})`);
+        const proc = headlessProcesses.get(String(child.pid));
+        // Kill the pipe holder too
+        if (proc && proc.pipeHolderPid) {
+            try { process.kill(proc.pipeHolderPid, 'SIGTERM'); } catch { }
+        }
+        try { fs.unlinkSync(pipeName); } catch { }
         headlessProcesses.delete(String(child.pid));
-        pipeServer.close();
         // Remove from lsInstances
         const idx = lsInstances.findIndex(i => i.pid === String(child.pid));
         if (idx >= 0) {
@@ -450,6 +612,7 @@ async function launchHeadlessLS(folderPath) {
                 broadcastAll({ type: 'conversations_updated' });
             } catch { }
         }
+        saveState(); // persist removal
     });
 
     // 8. Wait for ports
@@ -529,6 +692,9 @@ async function launchHeadlessLS(folderPath) {
     console.log(`  FolderURI: ${verifiedUri}`);
     console.log(`========================================\n`);
 
+    // Persist state to disk (survives Deck restarts)
+    saveState();
+
     // Notify frontend
     try {
         const { broadcastAll } = require('./ws');
@@ -561,8 +727,15 @@ function killHeadlessLS(pid) {
     }
 
     if (proc) {
-        try { proc.child.kill(); } catch { }
-        try { proc.pipeServer.close(); } catch { }
+        try {
+            if (proc.child) proc.child.kill();
+            else process.kill(parseInt(pidStr, 10), 'SIGTERM');
+        } catch { }
+        // Kill pipe holder process
+        if (proc.pipeHolderPid) {
+            try { process.kill(proc.pipeHolderPid, 'SIGTERM'); } catch { }
+        }
+        if (proc.pipePath) try { fs.unlinkSync(proc.pipePath); } catch { }
         headlessProcesses.delete(pidStr);
     } else {
         // Process tracked in lsInstances but not in headlessProcesses — force kill
@@ -578,6 +751,9 @@ function killHeadlessLS(pid) {
     // Remove from lsInstances
     const removed = lsInstances.splice(idx, 1)[0];
     console.log(`[Headless] Killed: ${removed.workspaceName} (PID: ${pidStr})`);
+
+    // Persist state
+    saveState();
 
     // Notify frontend
     try {
@@ -611,21 +787,31 @@ function isHeadlessPid(pid) {
 }
 
 // ====================================================================
-//  Cleanup all headless instances (on server shutdown)
+//  Kill all headless instances (explicit user action only)
 // ====================================================================
-function cleanupAll() {
+function killAllHeadless() {
     for (const [pid, proc] of headlessProcesses) {
-        try { proc.child.kill(); } catch { }
-        try { proc.pipeServer.close(); } catch { }
-        console.log(`[Headless] Cleanup: killed PID ${pid}`);
+        try {
+            if (proc.child) proc.child.kill();
+            else process.kill(parseInt(pid, 10), 'SIGTERM');
+        } catch { }
+        // Kill pipe holder
+        if (proc.pipeHolderPid) {
+            try { process.kill(proc.pipeHolderPid, 'SIGTERM'); } catch { }
+        }
+        if (proc.pipePath) try { fs.unlinkSync(proc.pipePath); } catch { }
+        console.log(`[Headless] Killed PID ${pid}`);
     }
     headlessProcesses.clear();
+    // Remove headless entries from lsInstances
+    for (let i = lsInstances.length - 1; i >= 0; i--) {
+        if (lsInstances[i].headless) lsInstances.splice(i, 1);
+    }
+    saveState();
 }
 
-// Cleanup on process exit
-process.on('exit', cleanupAll);
-process.on('SIGINT', () => { cleanupAll(); process.exit(); });
-process.on('SIGTERM', () => { cleanupAll(); process.exit(); });
+// On Deck exit: do NOT kill headless LS or pipe holders — they survive Deck restarts
+// Nothing to clean up since pipe holders are independent processes
 
 module.exports = {
     launchHeadlessLS,
@@ -633,5 +819,6 @@ module.exports = {
     getHeadlessInstances,
     getExtensionServer,
     isHeadlessPid,
-    cleanupAll,
+    killAllHeadless,
+    restoreHeadlessInstances,
 };

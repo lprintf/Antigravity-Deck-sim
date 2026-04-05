@@ -294,6 +294,13 @@ server.listen(PORT, async () => {
     console.warn('  ⚠️  Push service init failed:', e.message);
   }
   await init(() => startPolling());
+  // Restore headless LS instances that survived a Deck restart
+  try {
+    const { restoreHeadlessInstances } = require('./src/headless-ls');
+    await restoreHeadlessInstances();
+  } catch (e) {
+    console.warn('  ⚠️  Headless LS restore failed:', e.message);
+  }
   const { startResourceMonitor } = require('./src/resource-monitor');
   startResourceMonitor();
   startAutoRescan();

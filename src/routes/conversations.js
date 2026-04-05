@@ -32,7 +32,8 @@ module.exports = function setupConversationsRoutes(app) {
                 const filtered = {};
                 for (const [id, info] of Object.entries(trajData.trajectorySummaries)) {
                     const cascadeWsUris = (info.workspaces || []).map(w => w.workspaceFolderAbsoluteUri);
-                    if (cascadeWsUris.some(uri => uri === wsUri)) {
+                    // Include if: workspace matches OR no workspace binding (headless LS)
+                    if (cascadeWsUris.length === 0 || cascadeWsUris.some(uri => uri === wsUri)) {
                         filtered[id] = info;
                     }
                 }
