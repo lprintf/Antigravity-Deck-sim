@@ -427,12 +427,17 @@ async function rescanNow() {
         for (let i = lsInstances.length - 1; i >= 0; i--) {
             if (!instances.find(inst => inst.pid === lsInstances[i].pid)) {
                 const removed = lsInstances[i];
-                // Headless instances handle their own cleanup via child.on('exit')
-                if (removed.headless) continue;
-                console.log(`[-] Workspace gone: ${removed.workspaceName} (PID: ${removed.pid})`);
+                console.log(`[-] Workspace gone: ${removed.workspaceName} (PID: ${removed.pid})${removed.headless ? ' [headless]' : ''}`);
                 // Cleanup cascade state for this dead instance before removing
                 const { cleanupByInstance } = require('./cleanup');
                 cleanupByInstance(removed);
+                // If headless, also clean up headless tracking state
+                if (removed.headless) {
+                    try {
+                        const { _cleanupDeadHeadless } = require('./headless-ls');
+                        if (_cleanupDeadHeadless) _cleanupDeadHeadless(removed.pid);
+                    } catch { }
+                }
                 // If this was the active instance, switch to another
                 if (removed.active && lsInstances.length > 1) {
                     const nextIdx = i === 0 ? 1 : 0;

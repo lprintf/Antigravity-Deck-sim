@@ -813,6 +813,22 @@ function killAllHeadless() {
 // On Deck exit: do NOT kill headless LS or pipe holders — they survive Deck restarts
 // Nothing to clean up since pipe holders are independent processes
 
+// Called by detector when it discovers a headless PID is no longer alive
+function _cleanupDeadHeadless(pid) {
+    const pidStr = String(pid);
+    const proc = headlessProcesses.get(pidStr);
+    if (proc) {
+        // Kill pipe holder if exists
+        if (proc.pipeHolderPid) {
+            try { process.kill(proc.pipeHolderPid, 'SIGTERM'); } catch { }
+        }
+        if (proc.pipePath) try { fs.unlinkSync(proc.pipePath); } catch { }
+        headlessProcesses.delete(pidStr);
+    }
+    saveState();
+    console.log(`[Headless] Cleaned up dead instance PID ${pidStr}`);
+}
+
 module.exports = {
     launchHeadlessLS,
     killHeadlessLS,
@@ -821,4 +837,5 @@ module.exports = {
     isHeadlessPid,
     killAllHeadless,
     restoreHeadlessInstances,
+    _cleanupDeadHeadless,
 };
