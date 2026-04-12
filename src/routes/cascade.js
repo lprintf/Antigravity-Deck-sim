@@ -6,6 +6,7 @@ const { getAutoAccept, setAutoAccept, buildAcceptPayload } = require('../cache')
 const { startCascade, sendMessage } = require('../cascade'); // startAndSend is NOT used — intentionally omitted
 const { registerCascadeInstance } = require('../poller');
 const { resolveInst } = require('./route-helpers');
+const convWsMap = require('../conv-workspace-map');
 
 // Security: Method whitelist to prevent arbitrary LS method invocation
 const ALLOWED_LS_METHODS = new Set([
@@ -29,6 +30,21 @@ const ALLOWED_LS_METHODS = new Set([
     'SendCascadeMessage',
 ]);
 
+// --- Concurrency guard: check if LS instance has an active (RUNNING) cascade ---
+async function checkBusy(inst) {
+    try {
+        const data = await callApi('GetAllCascadeTrajectories', {}, inst);
+        const summaries = data.trajectorySummaries || {};
+        for (const [id, info] of Object.entries(summaries)) {
+            if (info.status === 'CASCADE_RUN_STATUS_RUNNING' ||
+                info.status === 'CASCADE_RUN_STATUS_WAITING_FOR_USER') {
+                return { busy: true, activeCascadeId: id, status: info.status, summary: info.summary };
+            }
+        }
+    } catch { /* If we can't check, proceed optimistically */ }
+    return { busy: false };
+}
+
 module.exports = function setupCascadeRoutes(app) {
     // Create a new cascade conversation
     app.post('/api/cascade/start', async (req, res) => {
@@ -37,49 +53,95 @@ module.exports = function setupCascadeRoutes(app) {
             if (!inst) return res.status(503).json({ error: 'No language server connected' });
             const cascadeId = await startCascade(inst);
             registerCascadeInstance(cascadeId, inst);
+            convWsMap.bind(cascadeId, inst.workspaceName);
             res.json({ cascadeId });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    // Send a message to an existing cascade (non-blocking — fires stream, returns immediately)
+    // Send a message to an existing cascade
+    // Fire-and-forget with concurrency guard
     app.post('/api/cascade/send', async (req, res) => {
         try {
             const { cascadeId, message, modelId, images, imageBase64 } = req.body;
             if (!cascadeId || !message) {
                 return res.status(400).json({ error: 'cascadeId and message are required' });
             }
-            // Fire-and-forget: start the stream but don't await completion
-            // Polling will pick up the AI's response steps in real-time
+
+            const inst = resolveInst(req);
+
+            // Guard: reject if LS is already busy with another cascade
+            const busyCheck = await checkBusy(inst);
+            if (busyCheck.busy) {
+                // Allow if the busy cascade is the SAME one we're sending to
+                if (busyCheck.activeCascadeId !== cascadeId) {
+                    console.log(`[Cascade] BLOCKED send to ${cascadeId.substring(0, 8)}: LS busy with ${busyCheck.activeCascadeId.substring(0, 8)} (${busyCheck.status})`);
+                    return res.status(409).json({
+                        error: `Workspace "${inst.workspaceName}" is busy with another cascade`,
+                        activeCascade: busyCheck.activeCascadeId,
+                        activeStatus: busyCheck.status,
+                        activeSummary: busyCheck.summary,
+                    });
+                }
+            }
+
             const opts = { modelId };
             if (images && images.length > 0) {
-                opts.media = images; // array of { mimeType, inlineData, uri, thumbnail }
+                opts.media = images;
             } else if (imageBase64) {
-                opts.imageBase64 = imageBase64; // legacy single-image fallback
+                opts.imageBase64 = imageBase64;
             }
-            const inst = resolveInst(req);
-            sendMessage(cascadeId, message, { ...opts, inst }).catch(e => console.error('[Cascade send error]', e.message));
+
+            // Fire-and-forget: LS stream takes 5-20s, can't block HTTP response
+            sendMessage(cascadeId, message, { ...opts, inst })
+                .then(r => console.log(`[Cascade] send OK: ${cascadeId.substring(0, 8)} status=${r?.status}`))
+                .catch(e => console.error(`[Cascade] send FAILED: ${cascadeId.substring(0, 8)}: ${e.message}`));
             res.json({ ok: true, cascadeId });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    // Start a new cascade and send a message (non-blocking)
+    // Start a new cascade and send a message
+    // Fire-and-forget with concurrency guard to prevent cross-cascade routing
     app.post('/api/cascade/submit', async (req, res) => {
         try {
             const { message, modelId, images, imageBase64 } = req.body;
             if (!message) {
                 return res.status(400).json({ error: 'message is required' });
             }
-            // Start cascade synchronously, then fire-and-forget the message
+
             const inst = resolveInst(req);
+            if (!inst) return res.status(503).json({ error: 'No language server connected' });
+
+            // Guard: reject if LS is already busy with an active cascade
+            const busyCheck = await checkBusy(inst);
+            if (busyCheck.busy) {
+                console.log(`[Cascade] BLOCKED submit on ${inst.workspaceName}: LS busy with ${busyCheck.activeCascadeId.substring(0, 8)} (${busyCheck.status})`);
+                return res.status(409).json({
+                    error: `Workspace "${inst.workspaceName}" is busy with another cascade`,
+                    activeCascade: busyCheck.activeCascadeId,
+                    activeStatus: busyCheck.status,
+                    activeSummary: busyCheck.summary,
+                });
+            }
+
+            // Start cascade synchronously
             const cascadeId = await startCascade(inst);
             registerCascadeInstance(cascadeId, inst);
+            convWsMap.bind(cascadeId, inst.workspaceName);
+            console.log(`[Cascade] New conversation: ${cascadeId.substring(0, 8)} on ${inst.workspaceName}`);
+
             const opts = { modelId, inst };
             if (images && images.length > 0) {
                 opts.media = images;
             } else if (imageBase64) {
                 opts.imageBase64 = imageBase64;
             }
-            sendMessage(cascadeId, message, opts).catch(e => console.error('[Cascade submit error]', e.message));
+
+            // Fire-and-forget: LS persists cascade only after stream completes (5-20s)
+            // Polling will pick up the conversation once LS processes it
+            sendMessage(cascadeId, message, opts)
+                .then(r => console.log(`[Cascade] submit stream OK: ${cascadeId.substring(0, 8)} status=${r?.status}`))
+                .catch(e => console.error(`[Cascade] submit stream FAILED: ${cascadeId.substring(0, 8)}: ${e.message}`));
+
             res.json({ cascadeId });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });

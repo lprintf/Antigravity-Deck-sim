@@ -79,15 +79,66 @@ async function restoreHeadlessInstances() {
             // Tag the existing entry as headless so it's properly managed
             alreadyKnown.headless = true;
             headlessProcesses.set(String(entry.pid), { child: null, pipeHolderPid: entry.pipeHolderPid || null, pipePath: entry.pipePath });
+
+            // CRITICAL: Verify port is still valid. detector.init() may have
+            // scanned an incorrect port (multi-LS containers share /proc/net/tcp).
+            // Use saved port from headless.json (which was correct at launch time).
+            const savedPort = entry.port;
+            const detectorPort = alreadyKnown.port;
+            if (savedPort && String(savedPort) !== String(detectorPort)) {
+                // Saved port differs from what detector found — try saved port first
+                const savedResult = await findApiPort([savedPort], entry.csrfToken).catch(() => null);
+                if (savedResult) {
+                    alreadyKnown.port = savedResult.port;
+                    alreadyKnown.useTls = savedResult.useTls;
+                    console.log(`[Headless] Re-tagged + port corrected: ${entry.workspaceName} (PID: ${entry.pid}, ${detectorPort} → ${savedResult.port})`);
+                } else {
+                    // Saved port also dead — try full re-probe
+                    const ports = await waitForPorts(parseInt(entry.pid), 3000);
+                    const freshResult = await findApiPort(ports, entry.csrfToken).catch(() => null);
+                    if (freshResult) {
+                        alreadyKnown.port = freshResult.port;
+                        alreadyKnown.useTls = freshResult.useTls;
+                        console.log(`[Headless] Re-tagged + port re-probed: ${entry.workspaceName} (PID: ${entry.pid}, port ${freshResult.port})`);
+                    } else {
+                        console.log(`[Headless] Re-tagged but port unverified: ${entry.workspaceName} (PID: ${entry.pid}, keeping ${detectorPort})`);
+                    }
+                }
+            } else {
+                // Verify the detector-found port actually works
+                const verifyResult = await findApiPort([detectorPort], alreadyKnown.csrfToken).catch(() => null);
+                if (!verifyResult) {
+                    // Port is dead — full re-probe
+                    const ports = await waitForPorts(parseInt(entry.pid), 3000);
+                    const freshResult = await findApiPort(ports, alreadyKnown.csrfToken).catch(() => null);
+                    if (freshResult) {
+                        alreadyKnown.port = freshResult.port;
+                        alreadyKnown.useTls = freshResult.useTls;
+                        console.log(`[Headless] Re-tagged + port refreshed: ${entry.workspaceName} (PID: ${entry.pid}, ${detectorPort} → ${freshResult.port})`);
+                    }
+                }
+                console.log(`[Headless] Re-tagged existing: ${entry.workspaceName} (PID: ${entry.pid}, port ${alreadyKnown.port})`);
+            }
+
+            // Also sync CSRF token from saved state (detector may have wrong one)
+            if (entry.csrfToken && alreadyKnown.csrfToken !== entry.csrfToken) {
+                alreadyKnown.csrfToken = entry.csrfToken;
+            }
+
             restored++;
-            console.log(`[Headless] Re-tagged existing: ${entry.workspaceName} (PID: ${entry.pid})`);
             continue;
         }
 
-        // Verify the API is still responding
-        const apiResult = await findApiPort([entry.port], entry.csrfToken).catch(() => null);
+        // Not yet discovered by detector — try to restore from saved state
+        // First try saved port, then full re-probe
+        let apiResult = await findApiPort([entry.port], entry.csrfToken).catch(() => null);
         if (!apiResult) {
-            console.log(`[Headless] PID ${entry.pid} (${entry.workspaceName}) alive but API not responding on port ${entry.port}, skipping`);
+            // Saved port dead — try full port scan
+            const ports = await waitForPorts(parseInt(entry.pid), 5000);
+            apiResult = ports.length ? await findApiPort(ports, entry.csrfToken).catch(() => null) : null;
+        }
+        if (!apiResult) {
+            console.log(`[Headless] PID ${entry.pid} (${entry.workspaceName}) alive but API not responding, skipping`);
             continue;
         }
 
@@ -99,21 +150,21 @@ async function restoreHeadlessInstances() {
             workspaceName: entry.workspaceName,
             workspaceFolderUri: entry.workspaceFolderUri,
             category: 'workspace',
-            port: entry.port,
-            useTls: entry.useTls,
+            port: apiResult.port,
+            useTls: apiResult.useTls,
             active: false,
             headless: true,
         };
         lsInstances.push(instance);
         headlessProcesses.set(String(entry.pid), { child: null, pipeHolderPid: entry.pipeHolderPid || null, pipePath: entry.pipePath });
         restored++;
-        console.log(`[Headless] Restored: ${entry.workspaceName} (PID: ${entry.pid}, Port: ${entry.port})`);
+        console.log(`[Headless] Restored: ${entry.workspaceName} (PID: ${entry.pid}, Port: ${apiResult.port})`);
     }
 
     if (restored > 0) {
         console.log(`[Headless] Restored ${restored}/${saved.length} headless instances`);
     }
-    // Clean up entries for dead processes
+    // Persist updated port info
     saveState();
 }
 
@@ -581,14 +632,38 @@ async function launchHeadlessLS(folderPath) {
 
     console.log(`[Headless] Launched PID: ${child.pid}, CSRF: ${csrfToken.substring(0, 8)}...`);
 
-    // Track stderr for debugging (best-effort, may lose after Deck restart)
-    child.stdout.on('data', () => {}); // drain stdout
-    child.stderr.on('data', (d) => {
-        const s = d.toString().trim();
-        if (s.length < 300 && !s.includes('WARN') && !s.includes('DEBUG')) {
-            console.log(`[Headless:${child.pid}] ${s}`);
+    // --- Parse REAL ports from LS stderr ---
+    // LS logs to stderr: "Language server listening on random port at XXXXX for HTTP"
+    // and:    "Language server listening on random port at XXXXX for HTTPS (gRPC)"
+    // This is 100% reliable — no /proc/net/tcp scanning needed.
+    let parsedHttpPort = null;
+    let parsedHttpsPort = null;
+    const portParsePromise = new Promise((resolve) => {
+        const timeout = setTimeout(() => resolve(), 15000); // max wait 15s
+        function checkDone() {
+            if (parsedHttpPort && parsedHttpsPort) {
+                clearTimeout(timeout);
+                resolve();
+            }
         }
+        child.stderr.on('data', (d) => {
+            const lines = d.toString().split('\n');
+            for (const line of lines) {
+                const httpMatch = line.match(/listening on random port at (\d+) for HTTP\b(?!S)/);
+                if (httpMatch) { parsedHttpPort = parseInt(httpMatch[1], 10); checkDone(); }
+                const httpsMatch = line.match(/listening on random port at (\d+) for HTTPS/);
+                if (httpsMatch) { parsedHttpsPort = parseInt(httpsMatch[1], 10); checkDone(); }
+                // Also log interesting LS messages
+                const s = line.trim();
+                if (s.length > 0 && s.length < 300 && !s.includes('WARN') && !s.includes('DEBUG')) {
+                    console.log(`[Headless:${child.pid}] ${s}`);
+                }
+            }
+        });
     });
+
+    // Drain stdout
+    child.stdout.on('data', () => {});
 
     // Track for cleanup
     headlessProcesses.set(String(child.pid), { child, pipeHolderPid: pipeHolder.pid, pipePath: pipeName });
@@ -615,20 +690,26 @@ async function launchHeadlessLS(folderPath) {
         saveState(); // persist removal
     });
 
-    // 8. Wait for ports
-    const ports = await waitForPorts(child.pid);
-    if (!ports.length) {
-        child.kill();
-        pipeServer.close();
-        headlessProcesses.delete(String(child.pid));
-        throw new Error('Headless LS failed to bind ports within timeout');
-    }
+    // 8. Wait for LS to report its ports via stdout
+    await portParsePromise;
+    console.log(`[Headless] PID ${child.pid} ports: HTTP=${parsedHttpPort}, HTTPS=${parsedHttpsPort}`);
 
-    // 9. Find the API port (HTTPS vs HTTP)
-    const apiResult = await findApiPort(ports, csrfToken);
+    // 9. Find the API port — use parsed ports first, fallback to scan
+    let apiResult = null;
+    if (parsedHttpsPort || parsedHttpPort) {
+        const candidatePorts = [parsedHttpsPort, parsedHttpPort].filter(Boolean);
+        apiResult = await findApiPort(candidatePorts, csrfToken);
+    }
+    if (!apiResult) {
+        // Fallback: scan ports (less reliable in multi-LS containers)
+        console.log(`[Headless] Port parse failed, falling back to port scan for PID ${child.pid}...`);
+        const ports = await waitForPorts(child.pid);
+        if (ports.length) apiResult = await findApiPort(ports, csrfToken);
+    }
     if (!apiResult) {
         child.kill();
-        pipeServer.close();
+        try { process.kill(pipeHolder.pid, 'SIGTERM'); } catch {}
+        try { fs.unlinkSync(pipeName); } catch {}
         headlessProcesses.delete(String(child.pid));
         throw new Error('Headless LS ports found but API not responding');
     }

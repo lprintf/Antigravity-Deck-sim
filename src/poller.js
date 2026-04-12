@@ -13,6 +13,7 @@ function _broadcast(data, targetConvId) { return require('./ws').broadcast(data,
 function _broadcastAll(data) { return require('./ws').broadcastAll(data); }
 const { stepCache, getStepCountAndStatus, ensureCached, detectApiStartIndex, fetchingSet } = require('./step-cache');
 const { handleAutoAccept, startAutoAcceptPolling } = require('./auto-accept');
+const convWsMap = require('./conv-workspace-map');
 
 // --- State ---
 let pollTimer = null;
@@ -82,6 +83,10 @@ async function pollNow() {
                     const existing = convToPoll.get(cascadeId);
                     // Always update cascade→instance map
                     cascadeInstanceMap.set(cascadeId, inst);
+                    // Auto-bind new conversations to their LS instance's workspace
+                    if (!convWsMap.getWorkspace(cascadeId) && inst.workspaceName) {
+                        convWsMap.bind(cascadeId, inst.workspaceName);
+                    }
 
                     if (!existing || isRunning) {
                         convToPoll.set(cascadeId, {

@@ -9,6 +9,7 @@ const { lsInstances } = require('../config');
 const { stepCache } = require('../cache');
 const { getInstanceByName } = require('../detector');
 const { resolveInst } = require('./route-helpers');
+const convWsMap = require('../conv-workspace-map');
 
 // Private helper — clear all step cache
 function clearCache() {
@@ -26,16 +27,26 @@ module.exports = function setupConversationsRoutes(app) {
             // Get all trajectories from this LS instance
             const trajData = await callApiOnInstance(inst, 'GetAllCascadeTrajectories');
 
-            // Filter: only keep cascades whose workspace URI matches this instance
-            if (inst.workspaceFolderUri && trajData.trajectorySummaries) {
-                const wsUri = inst.workspaceFolderUri;
+            // Filter by Deck-side conv→workspace map (LS workspace field is unreliable)
+            const wsName = inst.workspaceName;
+            if (trajData.trajectorySummaries) {
                 const filtered = {};
                 for (const [id, info] of Object.entries(trajData.trajectorySummaries)) {
-                    const cascadeWsUris = (info.workspaces || []).map(w => w.workspaceFolderAbsoluteUri);
-                    // Include if: workspace matches OR no workspace binding (headless LS)
-                    if (cascadeWsUris.length === 0 || cascadeWsUris.some(uri => uri === wsUri)) {
+                    const boundWs = convWsMap.getWorkspace(id);
+                    if (boundWs === wsName) {
+                        // Bound to this workspace — include
                         filtered[id] = info;
+                    } else if (!boundWs) {
+                        // Unbound: try to infer from LS workspace URI in trajectory data
+                        const cascadeWsUris = (info.workspaces || []).map(w => w.workspaceFolderAbsoluteUri);
+                        if (cascadeWsUris.length > 0 && inst.workspaceFolderUri &&
+                            cascadeWsUris.some(uri => uri === inst.workspaceFolderUri)) {
+                            convWsMap.bind(id, wsName);
+                            filtered[id] = info;
+                        }
+                        // If still unbound after check, don't show in any workspace
                     }
+                    // If boundWs !== wsName, skip (belongs to another workspace)
                 }
                 trajData.trajectorySummaries = filtered;
             }

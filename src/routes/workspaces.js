@@ -52,10 +52,28 @@ module.exports = function setupWorkspacesRoutes(app) {
         res.json(getHeadlessInstances());
     });
 
-    // Workspace list — all detected LS instances
+    // Workspace list — all detected LS instances, filtered to workspace root only
     app.get('/api/workspaces', (req, res) => {
-        const { lsInstances } = require('../config');
-        res.json(lsInstances.map((inst) => ({
+        const { lsInstances, getSettings } = require('../config');
+        const settings = getSettings();
+        const wsRoot = settings.defaultWorkspaceRoot;
+
+        const filtered = lsInstances.filter((inst) => {
+            // Always include headless instances (managed by Deck)
+            if (inst.headless) return true;
+            // If no workspace root configured, include all
+            if (!wsRoot) return true;
+            // Filter out LS instances whose workspace is outside the workspace root
+            if (inst.workspaceFolderUri) {
+                try {
+                    const resolved = decodeURIComponent(inst.workspaceFolderUri).replace(/^file:\/\//, '');
+                    return resolved.startsWith(wsRoot);
+                } catch {}
+            }
+            return true;
+        });
+
+        res.json(filtered.map((inst) => ({
             pid: inst.pid,
             workspaceId: inst.workspaceId,
             workspaceName: inst.workspaceName,

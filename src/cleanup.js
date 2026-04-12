@@ -3,6 +3,7 @@
 // All modules call into this instead of doing ad-hoc `delete stepCache[id]`.
 
 const { stepCache, fetchingSet } = require('./step-cache');
+const convWsMap = require('./conv-workspace-map');
 
 // Lazy imports to avoid circular deps (poller.js -> cleanup.js -> poller.js)
 function _getPollerState() {
@@ -26,6 +27,7 @@ function cleanupCascade(cascadeId) {
     knownConvIds.delete(cascadeId);
     delete lastCascadeStatusMap[cascadeId];
     cascadeInstanceMap.delete(cascadeId);
+    convWsMap.unbind(cascadeId);
 }
 
 /**

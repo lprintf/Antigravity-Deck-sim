@@ -296,6 +296,7 @@ async function init(onReady) {
             }
             const finalName = name || `LS-${inst.pid}`;
             const finalUri = folderUri || `detached://${inst.pid}`;
+
             if (folderUri) seenFolderUris.add(folderUri);
             lsInstances.push({
                 pid: inst.pid,
@@ -370,8 +371,36 @@ async function rescanNow() {
         let changed = false;
 
         for (const inst of instances) {
-            if (knownPids.has(inst.pid)) continue; // already known
-            if (isHeadlessPid(inst.pid)) continue; // managed by headless-ls module
+            if (knownPids.has(inst.pid)) {
+                // Already known — but if headless, verify port is still reachable
+                if (isHeadlessPid(inst.pid)) {
+                    const existing = lsInstances.find(i => i.pid === inst.pid);
+                    if (existing) {
+                        try {
+                            // Quick connectivity check (3s timeout)
+                            const { callApi } = require('./api');
+                            await callApi('GetUserStatus', {}, existing);
+                        } catch {
+                            // Port is dead — re-probe
+                            const ports = await detectPorts(inst.pid);
+                            if (ports.length) {
+                                const result = await findApiPort(ports, existing.csrfToken);
+                                if (result && (String(result.port) !== String(existing.port) || result.useTls !== existing.useTls)) {
+                                    const oldPort = existing.port;
+                                    existing.port = result.port;
+                                    existing.useTls = result.useTls;
+                                    changed = true;
+                                    console.log(`[~] Headless port updated: ${existing.workspaceName} (PID: ${existing.pid}, ${oldPort} → ${result.port})`);
+                                    // Update global lsConfig if this is the active instance
+                                    if (existing.active) switchToInstance(lsInstances.indexOf(existing));
+                                }
+                            }
+                        }
+                    }
+                }
+                continue;
+            }
+            if (isHeadlessPid(inst.pid)) continue; // new headless PID not yet in lsInstances — managed by headless-ls module
 
             const ports = await detectPorts(inst.pid);
             if (!ports.length) continue;
@@ -383,6 +412,7 @@ async function rescanNow() {
                 // (macOS Antigravity may not expose workspace via process args or API)
                 const finalName = name || `LS-${inst.pid}`;
                 const finalUri = folderUri || `detached://${inst.pid}`;
+
                 // Dedup: if same workspaceFolderUri already exists, replace the old one (PID may have changed after restart)
                 const existingIdx = folderUri ? lsInstances.findIndex(i => i.workspaceFolderUri === folderUri && i.pid !== inst.pid) : -1;
                 if (existingIdx >= 0) {
@@ -482,6 +512,11 @@ function getInstanceByName(name) {
 
 function getFirstActiveInstance() {
     const { lsInstances } = require('./config');
+    // Prefer headless instances over IDE workspace (avoid routing to internal wsp/0)
+    const headless = lsInstances.filter(i => i.headless);
+    if (headless.length > 0) {
+        return headless.find(i => i.active) || headless[0];
+    }
     return lsInstances.find(i => i.active) || lsInstances[0] || null;
 }
 
