@@ -703,6 +703,10 @@ export default function Home() {
               wsVersion={wsVersion}
               onSelectConversation={handleConvListSelect}
               onNewChat={handleNewChat}
+              onWorkspaceRemoved={() => {
+                setActiveWorkspace(null);
+                setWsVersion(v => v + 1);
+              }}
             />
           )}
 

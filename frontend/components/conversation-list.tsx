@@ -8,7 +8,7 @@ import { getWorkspaces } from '@/lib/cascade-api';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Plus, ChevronRight, Folder, MessageSquare } from 'lucide-react';
+import { Plus, ChevronRight, Folder, MessageSquare, Power } from 'lucide-react';
 
 interface ConvSummary {
     id: string;
@@ -23,12 +23,14 @@ interface ConversationListProps {
     wsVersion: number;
     onSelectConversation: (convId: string) => void;
     onNewChat: () => void;
+    onWorkspaceRemoved?: () => void;
 }
 
-export function ConversationList({ workspaceName, wsVersion, onSelectConversation, onNewChat }: ConversationListProps) {
+export function ConversationList({ workspaceName, wsVersion, onSelectConversation, onNewChat, onWorkspaceRemoved }: ConversationListProps) {
     const [conversations, setConversations] = useState<ConvSummary[]>([]);
     const [loading, setLoading] = useState(true);
     const [workspace, setWorkspace] = useState<Workspace | null>(null);
+    const [killing, setKilling] = useState(false);
 
     const loadConversations = useCallback(async () => {
         setLoading(true);
@@ -92,6 +94,27 @@ export function ConversationList({ workspaceName, wsVersion, onSelectConversatio
         if (status?.includes('DONE') || status?.includes('COMPLETED')) return 'bg-emerald-400';
         return 'bg-muted-foreground/30';
     };
+    const handleKillHeadless = useCallback(async () => {
+        if (!workspace?.headless || !workspace?.pid) return;
+        if (!confirm(`Stop headless workspace "${workspaceName}"?\nThis will terminate the LS process and all active cascades.`)) return;
+        setKilling(true);
+        try {
+            const res = await fetch(`${API_BASE}/api/workspaces/headless/${workspace.pid}`, {
+                method: 'DELETE',
+                headers: authHeaders(),
+            });
+            if (res.ok) {
+                onWorkspaceRemoved?.();
+            } else {
+                const err = await res.json().catch(() => ({}));
+                alert(`Failed to stop: ${err.error || res.statusText}`);
+            }
+        } catch (e: any) {
+            alert(`Error: ${e.message}`);
+        } finally {
+            setKilling(false);
+        }
+    }, [workspace, workspaceName, onWorkspaceRemoved]);
 
     return (
         <div className="flex-1 flex flex-col min-h-0">
@@ -108,13 +131,29 @@ export function ConversationList({ workspaceName, wsVersion, onSelectConversatio
                             </h2>
                             <p className="text-xs text-muted-foreground">
                                 {conversations.length} conversation{conversations.length !== 1 ? 's' : ''}
+                                {workspace?.headless && <span className="ml-1.5 text-emerald-400/80">● headless</span>}
                             </p>
                         </div>
                     </div>
-                    <Button size="sm" onClick={onNewChat} className="gap-1.5">
-                        <Plus className="h-3.5 w-3.5" />
-                        New Chat
-                    </Button>
+                    <div className="flex items-center gap-1.5">
+                        {workspace?.headless && (
+                            <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={handleKillHeadless}
+                                disabled={killing}
+                                className="gap-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                                title="Stop headless LS"
+                            >
+                                <Power className="h-3.5 w-3.5" />
+                                <span className="hidden sm:inline">{killing ? 'Stopping...' : 'Stop'}</span>
+                            </Button>
+                        )}
+                        <Button size="sm" onClick={onNewChat} className="gap-1.5">
+                            <Plus className="h-3.5 w-3.5" />
+                            New Chat
+                        </Button>
+                    </div>
                 </div>
             </div>
 

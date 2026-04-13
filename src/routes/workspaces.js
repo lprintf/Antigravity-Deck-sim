@@ -59,8 +59,8 @@ module.exports = function setupWorkspacesRoutes(app) {
         const wsRoot = settings.defaultWorkspaceRoot;
 
         const filtered = lsInstances.filter((inst) => {
-            // Always include headless instances (managed by Deck)
-            if (inst.headless) return true;
+            // Always include headless or active instances
+            if (inst.headless || inst.active) return true;
             // If no workspace root configured, include all
             if (!wsRoot) return true;
             // Filter out LS instances whose workspace is outside the workspace root
