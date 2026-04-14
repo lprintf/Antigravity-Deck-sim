@@ -354,8 +354,12 @@ export interface FsEntry {
     ext?: string;
 }
 
-export async function listWorkspaceDir(workspace: string, subpath = ''): Promise<{ entries: FsEntry[]; path: string }> {
-    const url = `${API_BASE}/api/workspaces/${encodeURIComponent(workspace)}/fs/list${subpath ? `?path=${encodeURIComponent(subpath)}` : ''}`;
+export async function listWorkspaceDir(workspace: string, subpath = '', showHidden = false): Promise<{ entries: FsEntry[]; path: string }> {
+    const params = new URLSearchParams();
+    if (subpath) params.set('path', subpath);
+    if (showHidden) params.set('showHidden', 'true');
+    const qs = params.toString();
+    const url = `${API_BASE}/api/workspaces/${encodeURIComponent(workspace)}/fs/list${qs ? `?${qs}` : ''}`;
     const res = await fetch(url, { headers: authHeaders() });
     if (!res.ok) throw new Error(`Dir list failed: ${res.status}`);
     return res.json();
@@ -449,3 +453,54 @@ export async function cancelAddAccountFlow(previousProfile: string): Promise<{ s
     return res.json();
 }
 
+// === Shell Execution ===
+export interface ShellExecResult {
+    exitCode: number;
+    signal: string | null;
+    stdout: string;
+    stderr: string;
+    truncated: boolean;
+    killed: boolean;
+    cwd: string;
+    outputFile?: string | null;
+}
+
+export interface ShellHistoryEntry {
+    filename: string;
+    path: string;
+    command: string;
+    exitCode: number;
+    size: number;
+    time: string;
+}
+
+export async function shellExec(command: string, workspace?: string, timeout?: number): Promise<ShellExecResult> {
+    const res = await fetch(`${API_BASE}/api/shell/exec`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ command, workspace, timeout }),
+    });
+    if (!res.ok) {
+        const e = await res.json().catch(() => ({}));
+        throw new Error(e.error || `Shell exec failed: ${res.status}`);
+    }
+    return res.json();
+}
+
+export async function getShellHistory(workspace?: string): Promise<{ entries: ShellHistoryEntry[]; cwd: string }> {
+    const url = workspace
+        ? `${API_BASE}/api/shell/history?workspace=${encodeURIComponent(workspace)}`
+        : `${API_BASE}/api/shell/history`;
+    const res = await fetch(url, { headers: authHeaders() });
+    if (!res.ok) throw new Error(`Shell history failed: ${res.status}`);
+    return res.json();
+}
+
+export async function clearShellHistory(workspace?: string): Promise<{ cleared: number }> {
+    const url = workspace
+        ? `${API_BASE}/api/shell/history?workspace=${encodeURIComponent(workspace)}`
+        : `${API_BASE}/api/shell/history`;
+    const res = await fetch(url, { method: 'DELETE', headers: authHeaders() });
+    if (!res.ok) throw new Error(`Shell clear failed: ${res.status}`);
+    return res.json();
+}

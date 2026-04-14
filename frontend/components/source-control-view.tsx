@@ -14,6 +14,7 @@ import {
     ChevronRight, ChevronDown, File, FileCode2,
     FileText, FileJson, Settings2, Image as ImageIcon, Table2,
     Plus, Minus, AlertCircle, Copy, Check, FileDiff, Menu, ArrowLeft,
+    Eye, EyeOff,
 } from 'lucide-react';
 
 const SyntaxHighlighter = dynamic(
@@ -190,12 +191,13 @@ interface TreeNodeProps {
     selectedFile: string | null;
     workspace: string;
     onFileClick: (path: string) => void;
+    showHidden?: boolean;
     isLast?: boolean;
 }
 
 function TreeNode({
     name, type, ext, depth, fullPath,
-    selectedFile, workspace, onFileClick,
+    selectedFile, workspace, onFileClick, showHidden,
 }: TreeNodeProps) {
     const [open, setOpen] = useState(false);
     const [children, setChildren] = useState<FsEntry[] | null>(null);
@@ -209,7 +211,7 @@ function TreeNode({
         if (next && children === null) {
             setLoading(true);
             try {
-                const data = await listWorkspaceDir(workspace, fullPath);
+                const data = await listWorkspaceDir(workspace, fullPath, showHidden);
                 setChildren(data.entries);
             } catch { setChildren([]); }
             finally { setLoading(false); }
@@ -288,6 +290,7 @@ function TreeNode({
                                 selectedFile={selectedFile}
                                 workspace={workspace}
                                 onFileClick={onFileClick}
+                                showHidden={showHidden}
                                 isLast={idx === children.length - 1}
                             />
                         ))
@@ -309,15 +312,16 @@ function ExplorerTab({ workspace }: { workspace: string }) {
     const [fileLoading, setFileLoading] = useState(false);
     const [fileError, setFileError] = useState<string | null>(null);
     const [mobileListOpen, setMobileListOpen] = useState(true);
+    const [showHidden, setShowHidden] = useState(false);
 
     const loadRoot = useCallback(async () => {
         setLoading(true); setError(null);
         try {
-            const data = await listWorkspaceDir(workspace, '');
+            const data = await listWorkspaceDir(workspace, '', showHidden);
             setRootEntries(data.entries);
         } catch (e: any) { setError(e.message); }
         finally { setLoading(false); }
-    }, [workspace]);
+    }, [workspace, showHidden]);
 
     useEffect(() => { loadRoot(); }, [loadRoot]);
 
@@ -360,6 +364,18 @@ function ExplorerTab({ workspace }: { workspace: string }) {
                         >
                             <RefreshCw className="w-3 h-3" />
                         </button>
+                        <button
+                            onClick={() => setShowHidden(v => !v)}
+                            className={cn(
+                                'p-1 rounded transition-colors',
+                                showHidden
+                                    ? 'text-primary/70 hover:text-primary bg-primary/10'
+                                    : 'text-muted-foreground/30 hover:text-muted-foreground/70'
+                            )}
+                            title={showHidden ? 'Hide dotfiles' : 'Show dotfiles'}
+                        >
+                            {showHidden ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                        </button>
                         {/* Mobile: close panel button */}
                         <button
                             onClick={() => setMobileListOpen(false)}
@@ -393,7 +409,7 @@ function ExplorerTab({ workspace }: { workspace: string }) {
                     )}
                     {!loading && !error && rootEntries?.map(entry => (
                         <TreeNode
-                            key={entry.name}
+                            key={`${entry.name}-${showHidden}`}
                             name={entry.name}
                             type={entry.type}
                             ext={entry.ext}
@@ -402,6 +418,7 @@ function ExplorerTab({ workspace }: { workspace: string }) {
                             selectedFile={selectedFile}
                             workspace={workspace}
                             onFileClick={handleFileClick}
+                            showHidden={showHidden}
                         />
                     ))}
                 </div>

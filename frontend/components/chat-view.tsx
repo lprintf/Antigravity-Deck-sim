@@ -13,6 +13,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { TokenUsage } from './token-usage';
 import { cn } from '@/lib/utils';
 import { SourceControlView } from './source-control-view';
+import { ShellPanel } from './shell-panel';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -21,7 +22,7 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Settings, Folder, Zap, BarChart2, RefreshCcw, SendHorizontal, Square, Paperclip, GitBranch, Plus, X, ChevronDown, Activity, Download, Bell, BellOff, Rocket, ArrowDown as ArrowDownIcon, Camera, Brain, Image as ImageIcon, Star } from 'lucide-react';
+import { Settings, Folder, Zap, BarChart2, RefreshCcw, SendHorizontal, Square, Paperclip, GitBranch, Terminal, Plus, X, ChevronDown, Activity, Download, Bell, BellOff, Rocket, ArrowDown as ArrowDownIcon, Camera, Brain, Image as ImageIcon, Star } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { notificationService, NOTIFICATION_SETTINGS_CHANGED } from '@/lib/notifications';
 
@@ -84,6 +85,7 @@ export function ChatView({ steps, baseIndex = 0, stepCount = 0, loadingOlder = f
     // activeCascadeId: derived from currentConvId, with local override for new chats
     const [localCascadeId, setLocalCascadeId] = useState<string | null>(null);
     const [showSourceControl, setShowSourceControl] = useState(false);
+    const [showShellPanel, setShowShellPanel] = useState(false);
     const activeCascadeId = localCascadeId ?? currentConvId;
     const [showScrollBtn, setShowScrollBtn] = useState(false);
     const prevStepsLenRef = useRef(0);
@@ -332,7 +334,7 @@ export function ChatView({ steps, baseIndex = 0, stepCount = 0, loadingOlder = f
         } finally {
             setSending(false);
         }
-    }, [input, sending, activeCascadeId, selectedWs, selectedModel, pendingImages, onCascadeCreated]);
+    }, [input, sending, activeCascadeId, selectedWs, selectedModel, pendingImages, onCascadeCreated, currentWorkspace]);
 
     // Image handling — shared processor for adding files to pending images
     const processImageFile = useCallback((file: File) => {
@@ -506,6 +508,13 @@ export function ChatView({ steps, baseIndex = 0, stepCount = 0, loadingOlder = f
                     <SourceControlView
                         workspace={currentWorkspace}
                         onClose={() => setShowSourceControl(false)}
+                    />
+                </div>
+            ) : showShellPanel && currentWorkspace !== null ? (
+                <div className="flex-1 min-h-0 overflow-hidden">
+                    <ShellPanel
+                        workspace={currentWorkspace}
+                        onClose={() => setShowShellPanel(false)}
                     />
                 </div>
             ) : (
@@ -833,10 +842,22 @@ export function ChatView({ steps, baseIndex = 0, stepCount = 0, loadingOlder = f
                                         'shrink-0 h-9 w-9 sm:h-11 sm:w-11 rounded-lg border border-border/50',
                                         showSourceControl && 'border-primary/30'
                                     )}
-                                    onClick={() => setShowSourceControl(v => !v)}
+                                    onClick={() => { setShowSourceControl(v => !v); setShowShellPanel(false); }}
                                     title="Source Control"
                                 >
                                     <GitBranch className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                    variant={showShellPanel ? 'secondary' : 'ghost'}
+                                    size="icon"
+                                    className={cn(
+                                        'shrink-0 h-9 w-9 sm:h-11 sm:w-11 rounded-lg border border-border/50',
+                                        showShellPanel && 'border-emerald-500/30'
+                                    )}
+                                    onClick={() => { setShowShellPanel(v => !v); setShowSourceControl(false); }}
+                                    title="Shell"
+                                >
+                                    <Terminal className="h-4 w-4" />
                                 </Button>
                                 <Textarea
                                     ref={inputRef}
