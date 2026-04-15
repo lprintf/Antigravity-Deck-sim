@@ -522,7 +522,7 @@ export default function Home() {
                 {/* Language Server detection status */}
                 <div className={`flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-medium ${detected ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : connected ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : 'bg-muted text-muted-foreground border border-border/30'}`}>
                   <div className={`w-1.5 h-1.5 rounded-full ${detected ? 'bg-emerald-400' : connected ? 'bg-amber-400 animate-pulse' : 'bg-muted-foreground/50'}`} />
-                  <span>{detected ? 'LS Connected' : connected ? 'Detecting...' : 'LS N/A'}</span>
+                  <span>{detected ? 'LS' : connected ? 'LS...' : 'LS N/A'}</span>
                 </div>
               </div>
             </div>
