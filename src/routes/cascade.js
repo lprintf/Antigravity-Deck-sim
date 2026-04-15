@@ -28,6 +28,8 @@ const ALLOWED_LS_METHODS = new Set([
     'UninstallCascadePlugin',
     'StartCascadeInvocation',
     'SendCascadeMessage',
+    'GetRevertPreview',
+    'RevertToCascadeStep',
 ]);
 
 // --- Concurrency guard: check if LS instance has an active (RUNNING) cascade ---
@@ -237,6 +239,38 @@ module.exports = function setupCascadeRoutes(app) {
             const result = await callApi('CancelCascadeInvocation', {
                 cascadeId: req.params.id,
             }, inst);
+            res.json(result);
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // Revert preview — which files will be affected
+    app.get('/api/cascade/:id/revert-preview', async (req, res) => {
+        try {
+            const inst = resolveInst(req);
+            if (!inst) return res.status(503).json({ error: 'No language server connected' });
+            const result = await callApi('GetRevertPreview', {
+                cascadeId: req.params.id,
+            }, inst);
+            res.json(result);
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // Revert to a specific step — rolls back conversation and code
+    // RevertToCascadeStep is a streaming RPC — use fire-and-forget
+    app.post('/api/cascade/:id/revert', async (req, res) => {
+        try {
+            const { stepIndex } = req.body || {};
+            if (stepIndex === undefined || stepIndex === null) {
+                return res.status(400).json({ error: 'stepIndex is required' });
+            }
+            const inst = resolveInst(req);
+            if (!inst) return res.status(503).json({ error: 'No language server connected' });
+            console.log(`[Revert] Reverting ${req.params.id.substring(0, 8)} to step ${stepIndex}`);
+            const result = await callApiFireAndForgetOnInstance(inst, 'RevertToCascadeStep', {
+                cascadeId: req.params.id,
+                stepIndex: stepIndex,
+            });
+            console.log(`[Revert] Result: ok=${result.ok}`);
             res.json(result);
         } catch (e) { res.status(500).json({ error: e.message }); }
     });

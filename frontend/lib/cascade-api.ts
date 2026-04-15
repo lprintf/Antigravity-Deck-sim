@@ -252,6 +252,36 @@ export async function getCascadeStatus(cascadeId: string): Promise<CascadeStatus
     return res.json();
 }
 
+// Revert preview — get list of files affected by reverting
+export interface RevertPreviewFile {
+    absolutePathUri?: string;
+    relativePath?: string;
+}
+export interface RevertPreview {
+    filesToRevert?: RevertPreviewFile[];
+    [key: string]: unknown;
+}
+
+export async function getRevertPreview(cascadeId: string): Promise<RevertPreview> {
+    const res = await fetch(`${API_BASE}/api/cascade/${cascadeId}/revert-preview`, { headers: authHeaders() });
+    if (!res.ok) throw new Error(`Revert preview failed: ${res.status}`);
+    return res.json();
+}
+
+// Revert to a specific step — rolls back conversation and code changes
+export async function revertToCascadeStep(cascadeId: string, stepIndex: number): Promise<{ ok: boolean; error?: string }> {
+    const res = await fetch(`${API_BASE}/api/cascade/${cascadeId}/revert`, {
+        method: 'POST',
+        headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stepIndex }),
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Revert failed: ${res.status}`);
+    }
+    return res.json();
+}
+
 // Auto-accept (server-side toggle for instant reaction)
 export async function getAutoAcceptState(): Promise<{ enabled: boolean }> {
     const res = await fetch(`${API_BASE}/api/auto-accept`, { headers: authHeaders() });

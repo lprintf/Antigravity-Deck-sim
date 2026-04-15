@@ -55,6 +55,7 @@ import { AgentResponse } from './chat/agent-response';
 import { ProcessingGroup } from './chat/processing-group';
 import { GeneratedImageStep } from './chat/generated-image-step';
 import { StreamingIndicator } from './chat/streaming-indicator';
+import { RevertDialog } from './chat/revert-dialog';
 import { WorkflowAutocomplete } from './workflow-autocomplete';
 import type { WorkflowAutocompleteHandle } from './workflow-autocomplete';
 
@@ -113,6 +114,8 @@ export function ChatView({ steps, baseIndex = 0, stepCount = 0, loadingOlder = f
     const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
     const [showWorkflows, setShowWorkflows] = useState(false);
     const [workflowQuery, setWorkflowQuery] = useState('');
+    // Revert dialog state
+    const [revertStepIndex, setRevertStepIndex] = useState<number | null>(null);
 
     // === Notification quick toggle ===
     const [notificationsEnabled, setNotificationsEnabled] = useState(() => notificationService?.getSettings().enabled ?? false);
@@ -502,6 +505,7 @@ export function ChatView({ steps, baseIndex = 0, stepCount = 0, loadingOlder = f
     const selectedModelLabel = models.find(m => m.modelId === selectedModel)?.label || 'Default';
 
     return (
+        <>
         <div className="flex-1 flex flex-col min-h-0">
             {showSourceControl && currentWorkspace !== null ? (
                 <div className="flex-1 min-h-0 overflow-hidden">
@@ -594,7 +598,7 @@ export function ChatView({ steps, baseIndex = 0, stepCount = 0, loadingOlder = f
                                     const animClass = isRecent ? 'message-animate' : '';
                                     if (group.type === 'user') {
                                         const { step, originalIndex } = group.steps[0];
-                                        return <div key={`u-${gIdx}`} className={animClass}><UserMessage step={step} index={originalIndex} /></div>;
+                                        return <div key={`u-${gIdx}`} className={animClass}><UserMessage step={step} index={originalIndex} cascadeId={activeCascadeId} onRevert={(idx) => setRevertStepIndex(idx)} /></div>;
                                     }
                                     if (group.type === 'response') {
                                         const { step, originalIndex } = group.steps[0];
@@ -894,5 +898,18 @@ export function ChatView({ steps, baseIndex = 0, stepCount = 0, loadingOlder = f
                 </>
             )}
         </div>
+        {/* Revert confirmation dialog */}
+        {revertStepIndex !== null && activeCascadeId && (
+            <RevertDialog
+                cascadeId={activeCascadeId}
+                stepIndex={revertStepIndex}
+                onClose={() => setRevertStepIndex(null)}
+                onReverted={() => {
+                    // Refresh conversation to reflect reverted state
+                    window.dispatchEvent(new CustomEvent('refresh-conversation', { detail: { cascadeId: activeCascadeId } }));
+                }}
+            />
+        )}
+        </>
     );
 }
