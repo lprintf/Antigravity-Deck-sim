@@ -450,7 +450,7 @@ export default function Home() {
 
   return (
     <AuthGate>
-      <div className="flex h-dvh w-full bg-background text-foreground overflow-hidden">
+      <div className="flex h-dvh w-full bg-background text-foreground overflow-hidden" style={{ height: 'var(--app-h, 100dvh)' }}>
         {/* Shadcn App Sidebar */}
         <AppSidebar
           currentConvId={currentConvId}

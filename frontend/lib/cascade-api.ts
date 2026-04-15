@@ -463,6 +463,8 @@ export interface ShellExecResult {
     killed: boolean;
     cwd: string;
     outputFile?: string | null;
+    duration?: number;
+    procId?: string;
 }
 
 export interface ShellHistoryEntry {
@@ -470,8 +472,22 @@ export interface ShellHistoryEntry {
     path: string;
     command: string;
     exitCode: number;
+    duration: number;
     size: number;
     time: string;
+}
+
+export interface ShellStreamEvent {
+    type: 'start' | 'stdout' | 'stderr' | 'done' | 'error';
+    procId?: string;
+    text?: string;
+    exitCode?: number;
+    signal?: string | null;
+    killed?: boolean;
+    duration?: number;
+    outputFile?: string | null;
+    truncated?: boolean;
+    message?: string;
 }
 
 export async function shellExec(command: string, workspace?: string, timeout?: number): Promise<ShellExecResult> {
@@ -487,6 +503,72 @@ export async function shellExec(command: string, workspace?: string, timeout?: n
     return res.json();
 }
 
+/** SSE streaming shell execution */
+export function shellExecStream(
+    command: string,
+    workspace: string | undefined,
+    onEvent: (event: ShellStreamEvent) => void,
+    timeout?: number,
+): AbortController {
+    const controller = new AbortController();
+    const headers = authHeaders();
+    headers['Content-Type'] = 'application/json';
+
+    fetch(`${API_BASE}/api/shell/exec/stream`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ command, workspace, timeout }),
+        signal: controller.signal,
+    }).then(async (res) => {
+        if (!res.ok) {
+            onEvent({ type: 'error', message: `Stream failed: ${res.status}` });
+            return;
+        }
+        const reader = res.body?.getReader();
+        if (!reader) return;
+        const decoder = new TextDecoder();
+        let buffer = '';
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                    try { onEvent(JSON.parse(line.slice(6))); } catch {}
+                }
+            }
+        }
+    }).catch((err) => {
+        if (err.name !== 'AbortError') {
+            onEvent({ type: 'error', message: err.message });
+        }
+    });
+
+    return controller;
+}
+
+export async function shellKill(procId: string): Promise<{ killed: boolean; error?: string }> {
+    const res = await fetch(`${API_BASE}/api/shell/kill`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ procId }),
+    });
+    return res.json();
+}
+
+export async function shellComplete(prefix: string, workspace?: string): Promise<string[]> {
+    const res = await fetch(`${API_BASE}/api/shell/complete`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ prefix, workspace }),
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.completions || [];
+}
+
 export async function getShellHistory(workspace?: string): Promise<{ entries: ShellHistoryEntry[]; cwd: string }> {
     const url = workspace
         ? `${API_BASE}/api/shell/history?workspace=${encodeURIComponent(workspace)}`
@@ -494,6 +576,16 @@ export async function getShellHistory(workspace?: string): Promise<{ entries: Sh
     const res = await fetch(url, { headers: authHeaders() });
     if (!res.ok) throw new Error(`Shell history failed: ${res.status}`);
     return res.json();
+}
+
+export async function getShellHistoryContent(filename: string, workspace?: string): Promise<string> {
+    const params = new URLSearchParams();
+    if (workspace) params.set('workspace', workspace);
+    const url = `${API_BASE}/api/shell/history/${encodeURIComponent(filename)}?${params}`;
+    const res = await fetch(url, { headers: authHeaders() });
+    if (!res.ok) throw new Error(`Shell history content failed: ${res.status}`);
+    const data = await res.json();
+    return data.content;
 }
 
 export async function clearShellHistory(workspace?: string): Promise<{ cleared: number }> {
