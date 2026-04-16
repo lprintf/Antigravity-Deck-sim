@@ -38,10 +38,10 @@ export const UserMessage = memo(function UserMessage({ step, index, cascadeId, o
 
     return (
         <div className="flex justify-end mb-4">
-            <div className="max-w-[80%] group relative rounded-lg rounded-br-md px-4 py-3 bg-blue-600/20 border border-blue-500/20 overflow-hidden min-w-0">
+            <div className="max-w-[80%] relative rounded-lg rounded-br-md px-4 py-3 bg-blue-600/20 border border-blue-500/20 overflow-hidden min-w-0">
                 <div className="flex items-center gap-2 mb-1.5">
                     <span className="text-[10px] font-bold text-blue-400 uppercase tracking-widest">You</span>
-                    <span className="text-[10px] text-muted-foreground/40 opacity-0 group-hover:opacity-100">#{index + 1}</span>
+                    <span className="text-[10px] text-muted-foreground/40">#{index + 1}</span>
                 </div>
 
                 {/* Images */}
@@ -60,7 +60,7 @@ export const UserMessage = memo(function UserMessage({ step, index, cascadeId, o
                 )}
 
                 {content && <div className="text-sm leading-relaxed"><MarkdownRenderer content={content} /></div>}
-                <div className="absolute top-2 right-2 flex items-center gap-1.5 md:opacity-0 md:group-hover:opacity-100 transition-opacity">
+                <div className="absolute top-2 right-2 flex items-center gap-1">
                     {cascadeId && onRevert && (
                         <Button
                             variant="ghost"
