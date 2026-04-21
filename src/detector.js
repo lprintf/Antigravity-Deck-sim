@@ -478,6 +478,13 @@ async function rescanNow() {
             }
         }
 
+        // Auto-activate first instance if none is active (Deck started before IDE)
+        if (lsInstances.length > 0 && !lsInstances.some(i => i.active)) {
+            switchToInstance(0);
+            changed = true;
+            console.log(`[~] Auto-activated first instance: ${lsInstances[0].workspaceName} (PID: ${lsInstances[0].pid})`);
+        }
+
         // Notify frontend when workspace list changes
         if (changed) {
             try {
