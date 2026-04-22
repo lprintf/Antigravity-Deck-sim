@@ -36,19 +36,28 @@ async function fetchAllSteps(convId, totalSteps, inst = null, fromIndex = 0) {
 
     // Check if JSON returned enough (respects fromIndex or returned from 0)
     const expectedCount = maxSteps - fromIndex;
-    if (jsonCount >= expectedCount) {
-        return { steps: jsonSteps.slice(0, expectedCount), hasGaps: false };
+
+    // Detect if JSON API ignored our fromIndex and returned from 0
+    // (Antigravity LS may ignore startIndex on both macOS & Linux)
+    const jsonStartedFrom0 = jsonCount > expectedCount && fromIndex > 0;
+    const usableSteps = jsonStartedFrom0 ? jsonSteps.slice(fromIndex) : jsonSteps;
+    const usableCount = usableSteps.length;
+
+    if (jsonStartedFrom0) {
+        console.log(`[*] JSON ignored startIndex=${fromIndex}, returned ${jsonCount} from 0. Slicing to [${fromIndex}..${fromIndex + usableCount}]`);
+    }
+
+    if (usableCount >= expectedCount) {
+        return { steps: usableSteps.slice(0, expectedCount), hasGaps: false };
     }
 
     // Step 2: Binary protobuf for remaining steps
     const { callApiBinary } = require('./api');
-    console.log(`[*] JSON returned ${jsonCount}/${expectedCount} steps (from ${fromIndex}). Using binary protobuf for remaining...`);
+    console.log(`[*] JSON returned ${usableCount}/${expectedCount} usable steps (from ${jsonStartedFrom0 ? '0→adjusted' : fromIndex}). Using binary protobuf for remaining...`);
 
-    const allSteps = [...jsonSteps];
+    const allSteps = [...usableSteps];
     let hasGaps = false;
-    // Detect if JSON API ignored our fromIndex and returned from 0
-    const jsonActualStart = jsonCount > expectedCount ? 0 : fromIndex;
-    let binaryStart = jsonActualStart + jsonCount;
+    let binaryStart = fromIndex + usableCount;
     let consecutiveEmptyRanges = 0;
     const MAX_EMPTY_RANGES = 5;
     const SUB_BATCH_SIZE = 50;
