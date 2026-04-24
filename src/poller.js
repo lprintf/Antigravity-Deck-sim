@@ -228,6 +228,15 @@ async function pollConversation(activeConvId, info) {
         const cachedLen = (cache.baseIndex || 0) + cache.steps.length; // server-absolute end of cached window
         if (!quietPoll && newStepCount !== cachedLen) console.log(`[poll] ${activeConvId.substring(0, 8)}: cached=${cachedLen} server=${newStepCount} status=${cascadeStatus}`);
 
+        // Safeguard: if cache is ahead of server (LS restart, step count regression, previous fetch bugs),
+        // the cache is permanently desynced. Invalidate and let ensureCached rebuild on next poll cycle.
+        if (cachedLen > newStepCount && newStepCount > 0) {
+            console.log(`[!] Cache desync: cached=${cachedLen} > server=${newStepCount} — invalidating ${activeConvId.substring(0, 8)}`);
+            delete stepCache[activeConvId];
+            return;
+        }
+
+
         // Status changes are now detected at pollNow() level (before isRunning/isUIViewed filter)
         // to ensure RUNNING→DONE transitions are caught for ALL cascades including bridge
 
