@@ -152,7 +152,10 @@ export function useWebSocket() {
                 return;
             }
             graceActiveRef.current = false;
-            setState(prev => ({ ...prev, connected: false, detected: false }));
+            // Only set connected=false. Keep detected state unchanged to avoid
+            // flashing the full-page "Not Detected" screen on transient disconnects.
+            // detected will be updated when WS reconnects and status message arrives.
+            setState(prev => ({ ...prev, connected: false }));
         });
 
         const offStatus = wsService.on('status', (data) => {

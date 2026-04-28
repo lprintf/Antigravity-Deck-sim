@@ -443,10 +443,16 @@ export default function Home() {
   const currentConvInfo = currentConvId ? conversations[currentConvId] : null;
 
   // === Determine what to show in main panel ===
-  // When LS not detected, force welcome/detection screen regardless of stored state
-  const showChat = detected && (currentConvId !== null || newChatMode);
-  const showConversationList = detected && !showChat && !showAccountInfo && !showSettings && !showLogs && !showAgentHub && !showConnect && !showOrchestrator && !showSourceControl && !showResources && activeWorkspace !== null;
-  const showWelcome = !detected || (!showChat && !showConversationList && !showAccountInfo && !showSettings && !showLogs && !showAgentHub && !showConnect && !showOrchestrator && !showSourceControl && !showResources);
+  // Track if LS was ever detected this session — keep UI alive during transient disconnects
+  const everDetectedRef = useRef(detected);
+  if (detected) everDetectedRef.current = true;
+  const everDetected = everDetectedRef.current;
+
+  // Show chat if LS was ever detected (not just currently detected) — preserves UI during disconnects
+  const showChat = everDetected && (currentConvId !== null || newChatMode);
+  const showConversationList = everDetected && !showChat && !showAccountInfo && !showSettings && !showLogs && !showAgentHub && !showConnect && !showOrchestrator && !showSourceControl && !showResources && activeWorkspace !== null;
+  // Only show welcome/detection screen on cold start (never detected) — NOT on transient disconnects
+  const showWelcome = !everDetected || (!showChat && !showConversationList && !showAccountInfo && !showSettings && !showLogs && !showAgentHub && !showConnect && !showOrchestrator && !showSourceControl && !showResources);
 
   return (
     <AuthGate>
@@ -571,8 +577,17 @@ export default function Home() {
             </div>
           )}
 
+          {/* === Disconnected banner — shown over current content, doesn't replace it === */}
+          {!connected && everDetected && (
+            <div className="flex items-center justify-center gap-2 px-3 py-1.5 bg-amber-500/10 border-b border-amber-500/20 text-amber-400 text-xs shrink-0 animate-in slide-in-from-top-1 duration-200">
+              <WifiOff className="w-3.5 h-3.5" />
+              <span>Reconnecting to Antigravity Deck...</span>
+              <Loader2 className="w-3 h-3 animate-spin" />
+            </div>
+          )}
+
           {/* === Main panel content === */}
-          {showWelcome && !detected && (
+          {showWelcome && !everDetected && (
             <div className="flex-1 flex items-center justify-center">
               {swapping ? (
                 <div className="text-center space-y-4 max-w-sm">
@@ -624,7 +639,7 @@ export default function Home() {
             </div>
           )}
 
-          {showWelcome && detected && !activeWorkspace && (
+          {showWelcome && everDetected && !activeWorkspace && (
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center space-y-4">
                 <div className="flex items-center justify-center gap-3">
