@@ -289,19 +289,20 @@ function RunTab({ workspace }: { workspace: string }) {
 
     const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
         if (showCompletions && completions.length > 0) {
-            if (e.key === 'Tab' || (e.key === 'ArrowDown' && showCompletions)) {
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                // Accept selected completion on Tab
+                applyCompletion(completions[selectedCompletion]);
+                return;
+            }
+            if (e.key === 'ArrowDown') {
                 e.preventDefault();
                 setSelectedCompletion(prev => (prev + 1) % completions.length);
                 return;
             }
-            if (e.key === 'ArrowUp' && showCompletions) {
+            if (e.key === 'ArrowUp') {
                 e.preventDefault();
                 setSelectedCompletion(prev => (prev - 1 + completions.length) % completions.length);
-                return;
-            }
-            if (e.key === 'Enter' && showCompletions) {
-                e.preventDefault();
-                applyCompletion(completions[selectedCompletion]);
                 return;
             }
             if (e.key === 'Escape') {
@@ -309,6 +310,7 @@ function RunTab({ workspace }: { workspace: string }) {
                 setShowCompletions(false);
                 return;
             }
+            // Enter falls through — always execute command
         }
 
         if (e.key === 'Tab') {
