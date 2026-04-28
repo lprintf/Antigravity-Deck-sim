@@ -22,6 +22,15 @@ async function sendMessage(cascadeId, text, options = {}) {
 
     const items = [{ text }];
 
+    // Check if auto-accept is enabled — new LS versions use autoExecutionPolicy
+    // in the cascadeConfig to auto-execute commands without IDE approval UI.
+    // Policy: 0=OFF (user confirms), 3=EAGER (auto-execute all)
+    let autoExecPolicy = 0; // default: needs user approval
+    try {
+        const { getAutoAccept } = require('./auto-accept');
+        if (getAutoAccept()) autoExecPolicy = 3; // EAGER
+    } catch { }
+
     const body = {
         metadata: {},
         cascadeId,
@@ -33,7 +42,14 @@ async function sendMessage(cascadeId, text, options = {}) {
                     value: {}
                 },
                 planModel: modelId,
-                requestedModel: { modelId }
+                requestedModel: { modelId },
+                toolConfig: {
+                    runCommand: {
+                        autoCommandConfig: {
+                            autoExecutionPolicy: autoExecPolicy,
+                        }
+                    }
+                }
             }
         }
     };
