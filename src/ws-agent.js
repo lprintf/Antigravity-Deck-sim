@@ -20,7 +20,9 @@ function setupAgentWebSocket(agentWss) {
         const authKey = process.env.AUTH_KEY || '';
         if (authKey) {
             const ip = req.socket.remoteAddress || '';
-            const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+            const rawIp = ip.replace('::ffff:', '');
+            const isLocal = rawIp === '127.0.0.1' || ip === '::1'
+                         || rawIp.startsWith('10.') || rawIp.startsWith('172.') || rawIp.startsWith('192.168.');
             if (!isLocal) {
                 const url = new URL(req.url, 'http://localhost');
                 const key = url.searchParams.get('auth_key');

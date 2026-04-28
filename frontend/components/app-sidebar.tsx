@@ -231,6 +231,17 @@ export function AppSidebar({
         if (conversationsVersion > 0) loadAll()
     }, [conversationsVersion, loadAll])
 
+    // Validate restored activeWorkspace — clear if stale (e.g. old index "0" or deleted workspace)
+    useEffect(() => {
+        if (!loading && wsData.length > 0 && activeWorkspace !== null) {
+            const found = wsData.some(d => d.workspace.workspaceName === activeWorkspace)
+            if (!found) {
+                onSelectWorkspace(wsData[0].workspace.workspaceName)
+            }
+        }
+    }, [loading, wsData, activeWorkspace, onSelectWorkspace])
+
+
     // TODO: Temporarily disabled 30s polling — workspace updates now driven by WS events
     // (conversationsVersion from useWebSocket). Re-enable if WS proves unreliable.
     // useEffect(() => {

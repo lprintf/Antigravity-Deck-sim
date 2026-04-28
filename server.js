@@ -210,7 +210,9 @@ if (AUTH_KEY) {
     
     // Localhost bypass only if explicitly enabled (disabled by default for security)
     const ip = req.ip || req.socket.remoteAddress || '';
-    const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+    const rawIp = ip.replace('::ffff:', '');
+    const isLocal = rawIp === '127.0.0.1' || ip === '::1'
+                 || rawIp.startsWith('10.') || rawIp.startsWith('172.') || rawIp.startsWith('192.168.');
     const allowLocalBypass = process.env.ALLOW_LOCALHOST_BYPASS === 'true';
     if (isLocal && allowLocalBypass) return next();
 
