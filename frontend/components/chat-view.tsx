@@ -22,7 +22,7 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Settings, Folder, Zap, BarChart2, RefreshCcw, SendHorizontal, Square, Paperclip, GitBranch, Terminal, Plus, X, ChevronDown, Activity, Download, Bell, BellOff, Rocket, ArrowDown as ArrowDownIcon, Camera, Brain, Image as ImageIcon, Star } from 'lucide-react';
+import { Settings, Folder, Zap, BarChart2, RefreshCcw, SendHorizontal, Square, Paperclip, GitBranch, Terminal, Plus, X, ChevronDown, Activity, Download, Bell, BellOff, Rocket, ArrowDown as ArrowDownIcon, Camera, Brain, Image as ImageIcon, Star, Check } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { notificationService, NOTIFICATION_SETTINGS_CHANGED } from '@/lib/notifications';
 
@@ -897,7 +897,30 @@ export function ChatView({ steps, baseIndex = 0, stepCount = 0, loadingOlder = f
                                         target.style.height = Math.min(target.scrollHeight, 200) + 'px';
                                     }}
                                 />
-                                {isRunning ? (
+                                {isWaiting && !autoAccept ? (
+                                    /* Accept / Reject buttons when waiting for user approval */
+                                    <div className="flex items-center gap-1.5 shrink-0">
+                                        <Button
+                                            onClick={() => handleInteract('accept')}
+                                            size="sm"
+                                            className="h-9 sm:h-11 px-3 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white gap-1.5"
+                                            title="Accept pending action"
+                                        >
+                                            <Check className="h-4 w-4" />
+                                            <span className="hidden sm:inline text-xs">Accept</span>
+                                        </Button>
+                                        <Button
+                                            onClick={() => handleInteract('reject')}
+                                            variant="destructive"
+                                            size="sm"
+                                            className="h-9 sm:h-11 px-3 rounded-lg gap-1.5"
+                                            title="Reject pending action"
+                                        >
+                                            <X className="h-4 w-4" />
+                                            <span className="hidden sm:inline text-xs">Reject</span>
+                                        </Button>
+                                    </div>
+                                ) : isRunning ? (
                                     <Button onClick={handleCancel} variant="destructive" size="icon" className="h-9 w-9 sm:h-11 sm:w-11 rounded-lg shrink-0">
                                         <Square className="h-4 w-4" />
                                     </Button>
