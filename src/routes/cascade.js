@@ -1,5 +1,5 @@
 // === Cascade Routes ===
-// /api/cascade/*, /api/auto-accept, /api/user/profile, /api/plugins/*, /api/ls/:method
+// /api/cascade/*, /api/auto-accept, /api/auto-continue, /api/user/profile, /api/plugins/*, /api/ls/:method
 
 const { callApi, callApiFireAndForgetOnInstance } = require('../api');
 const { getAutoAccept, setAutoAccept, buildAcceptPayload } = require('../cache');
@@ -7,6 +7,7 @@ const { startCascade, sendMessage } = require('../cascade'); // startAndSend is 
 const { registerCascadeInstance } = require('../poller');
 const { resolveInst } = require('./route-helpers');
 const convWsMap = require('../conv-workspace-map');
+const { getAutoContinue, setAutoContinue, cancelRetry } = require('../auto-continue');
 
 // Security: Method whitelist to prevent arbitrary LS method invocation
 const ALLOWED_LS_METHODS = new Set([
@@ -97,6 +98,8 @@ module.exports = function setupCascadeRoutes(app) {
             sendMessage(cascadeId, message, { ...opts, inst })
                 .then(r => console.log(`[Cascade] send OK: ${cascadeId.substring(0, 8)} status=${r?.status}`))
                 .catch(e => console.error(`[Cascade] send FAILED: ${cascadeId.substring(0, 8)}: ${e.message}`));
+            // Cancel pending auto-continue retry if user manually sends
+            cancelRetry(cascadeId);
             res.json({ ok: true, cascadeId });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
@@ -283,6 +286,16 @@ module.exports = function setupCascadeRoutes(app) {
         const { enabled } = req.body || {};
         setAutoAccept(!!enabled);
         res.json({ enabled: getAutoAccept() });
+    });
+
+    // Auto-continue toggle (auto-retry on retryable errors)
+    app.get('/api/auto-continue', (req, res) => {
+        res.json({ enabled: getAutoContinue() });
+    });
+    app.post('/api/auto-continue', (req, res) => {
+        const { enabled } = req.body || {};
+        setAutoContinue(!!enabled);
+        res.json({ enabled: getAutoContinue() });
     });
 
     // Token usage / generator metadata

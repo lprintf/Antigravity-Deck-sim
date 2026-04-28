@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react';
 import { Step } from '@/lib/types';
 import { extractStepContent, getStepConfig } from '@/lib/step-utils';
-import { cascadeSend, cascadeSubmit, cascadeCancel, cascadeInteract, getWorkspaces, getModels, getAutoAcceptState, setAutoAcceptState, saveMedia, clearConversationCache, fetchWorkflows } from '@/lib/cascade-api';
+import { cascadeSend, cascadeSubmit, cascadeCancel, cascadeInteract, getWorkspaces, getModels, getAutoAcceptState, setAutoAcceptState, getAutoContinueState, setAutoContinueState, saveMedia, clearConversationCache, fetchWorkflows } from '@/lib/cascade-api';
 import type { Workspace, CascadeModel, MediaItem, WorkflowItem } from '@/lib/cascade-api';
 import { API_BASE } from '@/lib/config';
 import { authHeaders } from '@/lib/auth';
@@ -94,6 +94,8 @@ export function ChatView({ steps, baseIndex = 0, stepCount = 0, loadingOlder = f
 
     // Auto-accept: synced with backend for instant server-side reaction
     const [autoAccept, setAutoAccept] = useState<boolean>(false);
+    // Auto-continue: auto-retry on retryable errors (503, network issues)
+    const [autoContinue, setAutoContinue] = useState<boolean>(false);
 
     // Workspace & model pickers
     const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
@@ -258,6 +260,8 @@ export function ChatView({ steps, baseIndex = 0, stepCount = 0, loadingOlder = f
             .catch(() => { });
         // Load auto-accept state from backend
         getAutoAcceptState().then(s => setAutoAccept(s.enabled)).catch(() => { });
+        // Load auto-continue state from backend
+        getAutoContinueState().then(s => setAutoContinue(s.enabled)).catch(() => { });
         // Load workflows
         fetchWorkflows(currentWorkspace || undefined).then(setWorkflows).catch(() => { });
     }, [wsVersion, currentWorkspace]);
@@ -728,6 +732,21 @@ export function ChatView({ steps, baseIndex = 0, stepCount = 0, loadingOlder = f
                                                 <span className={autoAccept ? "text-green-400/90" : ""}>Auto-accept</span>
                                             </div>
                                             <Switch checked={autoAccept} className="scale-75 pointer-events-none" />
+                                        </DropdownMenuItem>
+                                        <DropdownMenuItem
+                                            onClick={(e) => {
+                                                e.preventDefault();
+                                                const newVal = !autoContinue;
+                                                setAutoContinue(newVal);
+                                                setAutoContinueState(newVal).catch(() => { });
+                                            }}
+                                            className="cursor-pointer flex items-center justify-between"
+                                        >
+                                            <div className="flex items-center gap-2">
+                                                <RefreshCcw className={cn("w-3.5 h-3.5", autoContinue ? "text-blue-400" : "text-muted-foreground")} />
+                                                <span className={autoContinue ? "text-blue-400/90" : ""}>Auto-continue</span>
+                                            </div>
+                                            <Switch checked={autoContinue} className="scale-75 pointer-events-none" />
                                         </DropdownMenuItem>
                                         <DropdownMenuItem
                                             onClick={(e) => {

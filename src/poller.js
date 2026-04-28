@@ -13,6 +13,7 @@ function _broadcast(data, targetConvId) { return require('./ws').broadcast(data,
 function _broadcastAll(data) { return require('./ws').broadcastAll(data); }
 const { stepCache, getStepCountAndStatus, ensureCached, detectApiStartIndex, fetchingSet } = require('./step-cache');
 const { handleAutoAccept, startAutoAcceptPolling } = require('./auto-accept');
+const { handleAutoContinue, resetRetryCount, cancelRetry } = require('./auto-continue');
 const convWsMap = require('./conv-workspace-map');
 
 // --- State ---
@@ -139,6 +140,10 @@ async function pollNow() {
                     status: info.status,
                 }, cascadeId);
                 handleAutoAccept(cascadeId, info.status);
+                // Reset auto-continue retry count when cascade starts running again (error resolved)
+                if (info.status === 'CASCADE_RUN_STATUS_RUNNING') {
+                    resetRetryCount(cascadeId);
+                }
                 // Web Push: send push notification for status transitions
                 try {
                     const { handleCascadeStatusPush } = require('./push-service');
@@ -406,6 +411,22 @@ async function pollConversation(activeConvId, info) {
                         handleAutoAccept(activeConvId, 'CASCADE_RUN_STATUS_WAITING_FOR_USER', { trajectoryId, stepIndex, step });
                         break;
                     }
+                }
+            }
+        }
+
+        // Auto-continue: detect ERROR_MESSAGE steps and schedule retry
+        const { getAutoContinue } = require('./auto-continue');
+        if (getAutoContinue()) {
+            // Check new steps (both JSON and binary) for error messages
+            const allNewSteps = newStepsToAdd.length > 0 ? newStepsToAdd : freshSteps.slice(cachedLen - apiStartedAt);
+            for (let i = allNewSteps.length - 1; i >= 0; i--) {
+                const step = allNewSteps[i];
+                const sType = (step.type || '').replace('CORTEX_STEP_TYPE_', '');
+                if (sType === 'ERROR_MESSAGE') {
+                    const stepIdx = (newStepsToAdd.length > 0) ? cachedLen + i : apiStartedAt + (cachedLen - apiStartedAt) + i;
+                    handleAutoContinue(activeConvId, stepIdx, step, cache.inst);
+                    break;
                 }
             }
         }

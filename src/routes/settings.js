@@ -6,6 +6,7 @@ const { z } = require('zod');
 
 const SettingsSchema = z.object({
     autoAccept: z.boolean().optional(),
+    autoContinue: z.boolean().optional(),
     defaultWorkspaceRoot: z.string().max(500).optional(),
     suggestedWorkspaceRoot: z.string().max(500).optional(),
     defaultModel: z.string().max(100).optional(),

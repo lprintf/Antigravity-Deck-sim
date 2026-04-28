@@ -297,6 +297,21 @@ export async function setAutoAcceptState(enabled: boolean): Promise<{ enabled: b
     return res.json();
 }
 
+// Auto-continue (auto-retry on retryable errors like 503)
+export async function getAutoContinueState(): Promise<{ enabled: boolean }> {
+    const res = await fetch(`${API_BASE}/api/auto-continue`, { headers: authHeaders() });
+    return res.json();
+}
+
+export async function setAutoContinueState(enabled: boolean): Promise<{ enabled: boolean }> {
+    const res = await fetch(`${API_BASE}/api/auto-continue`, {
+        method: 'POST',
+        headers: authHeaders(),
+        body: JSON.stringify({ enabled }),
+    });
+    return res.json();
+}
+
 // Clear cache for a specific conversation (forces full re-fetch)
 export async function clearConversationCache(cascadeId: string): Promise<{ cleared: boolean }> {
     const res = await fetch(`${API_BASE}/api/cache/${cascadeId}`, { method: 'DELETE', headers: authHeaders() });
