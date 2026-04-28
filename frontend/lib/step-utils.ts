@@ -30,16 +30,38 @@ export function getStepConfig(type: string): StepDisplayConfig {
     return STEP_DISPLAY[type] || { role: 'system', icon: 'Settings', label: type.replace('CORTEX_STEP_TYPE_', ''), show: true };
 }
 
-// === Extract displayable content from a step ===
+// Safely convert any value to a string.
+// Binary protobuf decoding can produce objects/arrays where strings are expected.
+// e.g. commandLine becomes [{...}, "some text", {...}] instead of a flat string.
+function safeStr(v: unknown): string {
+    if (v == null) return '';
+    if (typeof v === 'string') return v;
+    if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+    if (Array.isArray(v)) return v.map(safeStr).join('');
+    if (typeof v === 'object') {
+        // Try common string-holding keys first
+        const obj = v as Record<string, unknown>;
+        for (const k of ['text', 'content', 'value', 'message', 'commandLine', 'response', 'notificationContent']) {
+            if (typeof obj[k] === 'string') return obj[k] as string;
+        }
+        // Concatenate all string values
+        const strs = Object.values(obj).filter(x => typeof x === 'string') as string[];
+        if (strs.length > 0) return strs.join('');
+        // Last resort: try to JSON-stringify for non-empty objects
+        try { return JSON.stringify(v); } catch { return ''; }
+    }
+    return String(v);
+}
+
 export function extractStepContent(step: Step): string | null {
     const type = step.type || '';
 
     if (step.userInput) {
         const ui = step.userInput;
         // JSON API format: items array
-        if (ui.items) return ui.items.map((i: any) => i.text || '').join('\n');
+        if (ui.items) return ui.items.map((i: any) => safeStr(i?.text ?? i)).join('\n');
         // Binary protobuf format: userResponse string
-        if (ui.userResponse) return ui.userResponse;
+        if (ui.userResponse) return safeStr(ui.userResponse);
         // Fallback: check numeric field keys from generic protobuf decoder
         // Field 1 in userInput message = items (repeated), field 2 = userResponse
         if (typeof ui === 'string') return ui;
@@ -49,12 +71,12 @@ export function extractStepContent(step: Step): string | null {
 
     if (step.plannerResponse) {
         const pr = step.plannerResponse;
-        if (pr.modifiedResponse) return pr.modifiedResponse;
-        if (pr.response) return pr.response;
-        if (pr.thinking) return pr.thinking;
-        if (pr.text) return pr.text;
-        if (pr.content) return pr.content;
-        if (pr.responseItems) return pr.responseItems.map(i => i.text || '').join('\n');
+        if (pr.modifiedResponse) return safeStr(pr.modifiedResponse);
+        if (pr.response) return safeStr(pr.response);
+        if (pr.thinking) return safeStr(pr.thinking);
+        if (pr.text) return safeStr(pr.text);
+        if (pr.content) return safeStr(pr.content);
+        if (pr.responseItems) return pr.responseItems.map(i => safeStr(i?.text ?? i)).join('\n');
         if (pr.toolCalls?.length) {
             return pr.toolCalls.map(tc => {
                 const name = tc.name || 'tool';
@@ -81,8 +103,8 @@ export function extractStepContent(step: Step): string | null {
 
     if (step.notifyUser) {
         const nu = step.notifyUser;
-        if (nu.notificationContent) return nu.notificationContent;
-        if (nu.message) return nu.message;
+        if (nu.notificationContent) return safeStr(nu.notificationContent);
+        if (nu.message) return safeStr(nu.message);
         try { const args = JSON.parse(step.metadata?.argumentsJson || '{}'); if (args.Message) return args.Message; } catch { /* */ }
         return null;
     }
@@ -118,7 +140,7 @@ export function extractStepContent(step: Step): string | null {
 
     if (step.runCommand || type === 'CORTEX_STEP_TYPE_RUN_COMMAND') {
         const rc = step.runCommand || {};
-        const cmdLine = rc.commandLine || rc.command || '';
+        const cmdLine = safeStr(rc.commandLine || rc.command || '');
         if (cmdLine) return `\`\`\`bash\n${cmdLine}\n\`\`\``;
         try { const args = JSON.parse(step.metadata?.argumentsJson || '{}'); if (args.CommandLine) return `\`\`\`bash\n${args.CommandLine}\n\`\`\``; } catch { /* */ }
         return null;
@@ -128,7 +150,7 @@ export function extractStepContent(step: Step): string | null {
         const sci = step.sendCommandInput || {};
         const parts: string[] = [];
         if (sci.terminate) parts.push('🛑 **Terminated** command');
-        else if (sci.input) parts.push(`⌨️ Input: \`${sci.input.substring(0, 100)}\``);
+        else if (sci.input) parts.push(`⌨️ Input: \`${safeStr(sci.input).substring(0, 100)}\``);
         if (sci.output?.full) { const out = sci.output.full.trim(); if (out.length > 0) parts.push(`\`\`\`\n${out.substring(0, 300)}${out.length > 300 ? '...' : ''}\n\`\`\``); }
         if (parts.length) return parts.join('\n');
         return null;
