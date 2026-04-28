@@ -287,6 +287,12 @@ async function init(onReady) {
         const result = await findApiPort(ports, inst.csrfToken);
         if (result) {
             const { name, category, folderUri } = await getWorkspaceInfo(result.port, inst.csrfToken, result.useTls, inst.workspaceId);
+            // Skip instances with no detectable workspace (IDE open but no folder loaded yet).
+            // They'll be picked up on next poll once a folder is opened.
+            if (!folderUri && (!name || name === 'unknown')) {
+                console.log(`[~] Skipping PID ${inst.pid}: no workspace detected (IDE may not have a folder open yet)`);
+                continue;
+            }
             // Allow instances without workspace folder — use fallback name
             // (macOS Antigravity may not expose workspace via process args or API)
             // Skip duplicate folder URIs (e.g. two LS processes for same workspace)
@@ -408,6 +414,8 @@ async function rescanNow() {
             const result = await findApiPort(ports, inst.csrfToken);
             if (result) {
                 const { name, category, folderUri } = await getWorkspaceInfo(result.port, inst.csrfToken, result.useTls, inst.workspaceId);
+                // Skip instances with no detectable workspace (IDE without folder open)
+                if (!folderUri && (!name || name === 'unknown')) continue;
                 // Allow instances without workspace folder — use fallback
                 // (macOS Antigravity may not expose workspace via process args or API)
                 const finalName = name || `LS-${inst.pid}`;
