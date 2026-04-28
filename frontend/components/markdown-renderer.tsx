@@ -215,6 +215,17 @@ function preprocessCciLinks(content: string): string {
     );
 }
 
+// Extract plain text from a HAST (HTML AST) node.
+// HAST text nodes have { type: 'text', value: '...' },
+// element nodes have { type: 'element', children: [...] }.
+// This is simpler and more reliable than traversing React elements.
+function extractTextFromHast(node: any): string {
+    if (!node) return '';
+    if (node.type === 'text') return node.value || '';
+    if (node.children) return node.children.map(extractTextFromHast).join('');
+    return '';
+}
+
 // Hoist component map to module scope — prevents ReactMarkdown from re-rendering
 const MD_COMPONENTS = {
     a({ href, children, ...props }: any) {
@@ -237,16 +248,19 @@ const MD_COMPONENTS = {
     pre({ children }: any) {
         return <pre className="code-block">{children}</pre>;
     },
-    code({ className, children, ...props }: any) {
+    code({ className, children, node, ...props }: any) {
         const isBlock = className?.includes('hljs') || className?.includes('language-');
         const language = className?.replace(/language-/, '').replace(/hljs\s*/, '') || '';
         if (!isBlock) {
             return <code className="inline-code" {...props}>{children}</code>;
         }
+        // Extract raw text from HAST node — avoids [object Object] from
+        // String() on rehype-highlight's React element tree
+        const rawText = extractTextFromHast(node).replace(/\n$/, '');
         return (
             <div className="code-block-wrapper">
                 {language && <span className="code-lang-label">{language}</span>}
-                <CopyButton text={String(children).replace(/\n$/, '')} />
+                <CopyButton text={rawText} />
                 <code className={className} {...props}>{children}</code>
             </div>
         );
